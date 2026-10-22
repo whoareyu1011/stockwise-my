@@ -134,7 +134,12 @@ posting. Raw multi-statement administrator editing is not a runtime API.
   direct edits; legitimate writes are nested in product/ledger triggers.
   Trigger-depth checking is defense in depth, not an authorization mechanism.
 - Deferred constraint triggers compare final balances to ledger sums and verify
-  posted order totals and complete source/reversal movement counts at commit.
+  posted order totals, complete source/reversal movement counts and matching
+  operation-key audit events at commit. Reversals cannot contain ordinary items
+  or change the original contact.
+- Both deferred validators are SECURITY DEFINER read-check functions, so final
+  checks do not depend on a future caller having direct table-read privileges
+  after the command function returns. No additional caller grants are added.
 - Posted header/item changes are blocked. Generated total columns are not
   compared as populated NEW values in BEFORE triggers.
 
@@ -209,6 +214,27 @@ Before exposure, a separately approved access-control phase must:
 
 None of that authorization, role provisioning, credential switching, new APIs
 or policy granting is implemented in this preparation. DATABASE_URL is unchanged.
+
+### Explicit SECURITY DEFINER inventory
+
+All seven are created while SET LOCAL ROLE is `stockwise_owner`, have fixed
+`pg_catalog, pg_temp` search paths, fully qualified application relations, no
+dynamic SQL, and no PUBLIC/API/runtime EXECUTE grant:
+
+- `initialize_balance`: initializes a new product's zero balance.
+- `audit_catalogue_change`: records catalogue field-name metadata.
+- `apply_movement`: atomically maintains a nonnegative balance.
+- `check_balance_integrity`: reads final ledger/balance state at deferred check.
+- `check_order_integrity`: reads final header/items/movements/audit state.
+- `post_order`: privileged, idempotent posting command.
+- `reverse_order`: privileged, idempotent full reversal command.
+
+The other seven helpers remain security-invoker functions; immediate trigger
+calls inside the command/maintenance functions execute under that active owner
+context. Deferred callbacks deliberately use their own definer context.
+The migration's intended ownership/ACLs are a static property of the script,
+not evidence of objects installed in the live database. Verify actual ownership,
+grants, inherited memberships and RLS behavior on the approved test target.
 
 ## Scope and limitations
 

@@ -29,6 +29,17 @@ assert len(functions) >= 10, "Function scan incomplete"
 headers = re.findall(r"CREATE FUNCTION stockwise\.\w+.*?AS \$fn\$", clean, re.S)
 assert len(headers) == len(functions)
 assert all("SET search_path = pg_catalog, pg_temp" in h for h in headers)
+named_headers = dict(re.findall(
+    r"CREATE FUNCTION stockwise\.(\w+)(.*?)AS \$fn\$", clean, re.S
+))
+expected_definers = {
+    "initialize_balance", "audit_catalogue_change", "apply_movement",
+    "check_balance_integrity", "check_order_integrity", "post_order", "reverse_order",
+}
+assert {
+    name for name, header in named_headers.items() if "SECURITY DEFINER" in header
+} == expected_definers
+assert not any(re.search(r"\bEXECUTE\b", body) for _, body in functions), "No dynamic SQL in function bodies"
 assert "REVOKE ALL ON ALL FUNCTIONS IN SCHEMA stockwise FROM PUBLIC;" in clean
 for name in [
     "stock_movements_one_original_item_uq", "stock_movements_one_reversal_uq",
@@ -43,6 +54,17 @@ guard = dict(functions)["guard_order"]
 assert "NEW.total" not in guard and "OLD.total" not in guard
 assert "NEW.subtotal,NEW.discount_total" in guard
 assert "NEW.original_order_id,NEW.posted_at,NEW.created_at" in guard
+integrity = dict(functions)["check_order_integrity"]
+assert "a.details->>'operation_key'=v_order.posting_key::text" in integrity
+assert "A reversal has linked opposite movements, not ordinary order items" in integrity
+assert "v_order.contact_id IS DISTINCT FROM v_original.contact_id" in integrity
+reverse = dict(functions)["reverse_order"]
+assert (
+    reverse.index("INSERT INTO stockwise.orders")
+    < reverse.index("INSERT INTO stockwise.stock_movements")
+    < reverse.index("SET status='reversed'")
+    < reverse.index("INSERT INTO stockwise.audit_logs")
+)
 assert "FORCE ROW LEVEL SECURITY" not in clean, "Owner trigger writes would need a revised policy design"
 for target in ["products", "contacts", "orders", "order_items", "stock_movements"]:
     for columns in re.findall(rf"REFERENCES stockwise\.{target}\(([^)]+)\)", clean):
@@ -51,6 +73,7 @@ package = json.loads((ROOT / "package.json").read_text())
 assert package["scripts"]["start"] == "node server.js"
 assert not any("migration" in str(v).lower() for v in package["scripts"].values())
 assert "0001_inventory" not in (ROOT / "server.js").read_text()
-print(f"PASS: {len(tables)} tables, {len(functions)} function definitions, closed grants, scoped references.")
+print(f"PASS: {len(tables)} tables, {len(functions)} function definitions, {len(expected_definers)} expected definers.")
+print("PASS: closed grants, scoped references, reversal command order and audit-check structure.")
 print("PASS: no role creation, runtime grant, destructive backout or startup migration hook.")
 print("LIMIT: structural checks only; not a SQL/PLpgSQL parser and not a database/concurrency test.")

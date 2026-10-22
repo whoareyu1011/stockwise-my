@@ -430,9 +430,11 @@ END;
 $fn$;
 
 CREATE FUNCTION stockwise.check_balance_integrity() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $fn$
 DECLARE v_balance bigint; v_ledger numeric;
 BEGIN
+  -- A deferred callback can run after the posting definer has returned.
+  -- Validate as the trusted owner, without requiring caller table-read grants.
   SELECT quantity INTO v_balance FROM stockwise.stock_balances
     WHERE company_id = NEW.company_id AND product_id = NEW.product_id;
   SELECT COALESCE(pg_catalog.sum(quantity_delta), 0) INTO v_ledger FROM stockwise.stock_movements
@@ -445,7 +447,7 @@ END;
 $fn$;
 
 CREATE FUNCTION stockwise.check_order_integrity() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $fn$
 DECLARE
   v_company uuid; v_id uuid;
   v_order stockwise.orders%ROWTYPE;
@@ -468,10 +470,19 @@ BEGIN
   IF v_order.kind = 'reversal' THEN
     SELECT * INTO v_original FROM stockwise.orders
       WHERE company_id = v_company AND id = v_order.original_order_id;
+    IF NOT FOUND OR v_original.kind = 'reversal' THEN
+      RAISE EXCEPTION 'Reversal must reference an ordinary original order';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM stockwise.order_items WHERE company_id=v_company AND order_id=v_id
+    ) THEN
+      RAISE EXCEPTION 'A reversal has linked opposite movements, not ordinary order items';
+    END IF;
     SELECT pg_catalog.count(*) INTO v_expected FROM stockwise.stock_movements
       WHERE company_id = v_company AND order_id = v_original.id;
     IF v_original.status IS DISTINCT FROM 'reversed' OR v_expected = 0 OR v_movements <> v_expected
-       OR v_order.subtotal <> v_original.subtotal OR v_order.discount_total <> v_original.discount_total THEN
+       OR v_order.subtotal <> v_original.subtotal OR v_order.discount_total <> v_original.discount_total
+       OR v_order.contact_id IS DISTINCT FROM v_original.contact_id THEN
       RAISE EXCEPTION 'Full reversal is incomplete or does not match original';
     END IF;
   ELSE
@@ -486,6 +497,18 @@ BEGIN
     ) THEN
       RAISE EXCEPTION 'Reversed order must have a complete posted reversal';
     END IF;
+  END IF;
+  -- Audit insertion occurs after the header/movements in both commands.
+  -- Check the final transaction state so a late audit failure cannot leave
+  -- a committed posting without its matching operation event.
+  IF NOT EXISTS (
+    SELECT 1 FROM stockwise.audit_logs a
+    WHERE a.company_id=v_company AND a.order_id=v_id
+      AND a.target_kind='order' AND a.target_id=v_id
+      AND a.action=CASE WHEN v_order.kind='reversal' THEN 'order_reversed' ELSE 'order_posted' END
+      AND a.details->>'operation_key'=v_order.posting_key::text
+  ) THEN
+    RAISE EXCEPTION 'Posted order requires its matching operation audit event';
   END IF;
   RETURN NULL;
 END;

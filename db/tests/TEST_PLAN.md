@@ -51,6 +51,7 @@ connected Supabase database without separate explicit approval.
 | S16 | Compare every balance with SUM(quantity_delta), including products with no movements | All equal; nonnegative |
 | S17 | Force an incomplete posted header with missing movements as trusted owner | Deferred integrity check rejects at commit/check |
 | S18 | Numeric/bigint overflow and extreme totals | Whole command fails, never wraps or silently truncates stock |
+| S19 | Trusted test owner assembles an otherwise complete posting but omits its audit, uses a different operation key in the audit, or injects a late audit error | Deferred check/command rejects; no committed unaudited posting |
 | I01 | Post same company/order/key twice | Same ID; unchanged movement/audit counts |
 | I02 | Repost with another key or reuse key for another order | Rejected, no second effect |
 | I03 | Repost original key after full reversal | Returns original ID without reposting inventory |
@@ -60,6 +61,10 @@ connected Supabase database without separate explicit approval.
 | R04 | Change retry key/date/reason, reverse draft, or reverse reversal | Rejected |
 | R05 | Reverse multi-line order with repeated products | Full exact negation, same final per-product balances |
 | R06 | Mark original reversed without a complete posted reversal | Deferred consistency rejects |
+| R07 | Post and then reverse a multi-item order within the same transaction; force constraints only after both commands finish | Every deferred callback reads final rows; original is reversed, reversal is posted, both audit events exist, and net stock returns to the baseline |
+| R08 | Reverse a posted order after committing it in a separate transaction | Same valid transition and stock effects; no dependence on posting's old trigger queue |
+| R09 | Convert a trusted-owner draft with existing items into a reversal, or use a different contact while assembling a reversal | Deferred validation rejects ordinary items/contact mismatch on reversal headers |
+| R10 | Put reversal in a savepoint, induce late failure, roll back that savepoint, then retry the same request | Original status/stock/audits restored; successful retry creates exactly one full reversal |
 | O01 | Opening quantity 20 on a never-used product | Balance 20 and one +20 ledger row |
 | O02 | Repeat opening, including after reversal or after previous non-opening movement | Rejected |
 | O03 | Opening order repeats one product | Rejected |
@@ -71,6 +76,8 @@ connected Supabase database without separate explicit approval.
 | A04 | Try changing search_path or creating same-named temp objects before posting | Fully qualified relations/functions resolve safely; no privilege escape |
 | A05 | Future proposed runtime role is owner-member, superuser or BYPASSRLS | Security review rejects role design; do not expose APIs |
 | A06 | Audit catalogue updates and posting/reversal | No tax IDs, personal values, passwords or URLs duplicated in audit details; database actor is not presented as a person |
+| A07 | In an explicitly approved isolated test only, separately authorize a test role with schema USAGE and EXECUTE on exactly the two commands, but no table SELECT/DML or helper EXECUTE; run commands, return from definer, then force deferred checks/commit as caller | Both owner-side validators can read their final state; no table/helper privileges need to be widened. This tests internal mechanics, not tenant authorization; never expose this unauthenticated role |
+| A08 | Inspect the seven intended SECURITY DEFINER functions and every helper after migration | Exact expected definer list from check_preparation.py; all owned by stockwise_owner, fixed search paths, no PUBLIC/API grants, and no dynamic SQL in function bodies |
 
 ## Concurrent-session schedules
 
@@ -99,6 +106,28 @@ Use explicit barriers and verify both final balances and ledger counts.
 9. **Different transaction isolation:** run normal suite at READ COMMITTED;
    at stronger isolation, exercise whole-transaction retries for SQLSTATE 40001.
    Exercise 40P01 deadlock retries too, retaining the operation key.
+10. **Reversal failure rollback:** hold stock locks in A while B attempts reversal;
+    inject an error after B's ledger work or audit insertion, release A, then
+    retry B's original operation key. Verify no partial header, movement, balance
+    or audit changes survived the failed attempt.
+
+## Review-specific assertions
+
+- On a legitimate reversal, `guard_order` allows draft-to-posted on the new
+  header and posted-to-reversed on the original. Original contact, reference,
+  kind, date, currency, payment snapshot, notes, monetary source fields, posting
+  key, original link, posting time and creation time are unchanged.
+- Generated totals are not accessed as populated NEW fields in BEFORE triggers.
+- Reversals contain no ordinary order items; each opposite movement links to one
+  original movement, with unique full-reversal constraints.
+- At final check time, each ordinary posting has its original `order_posted`
+  audit, and each reversal has `order_reversed`, with matching operation keys.
+- Deferral mode remains INITIALLY DEFERRED while the command executes. An early
+  SET CONSTRAINTS ALL IMMEDIATE is unsupported and must fail without partial
+  committed writes; it must not be used to dismiss a real end-of-command failure.
+- Backdated effective dates do not recompute historical availability. Test and
+  document that current stock is enforced at posting time; a separate approved
+  policy is required before historical replay or period-close accounting.
 
 ## Acceptance gate before any live migration
 
