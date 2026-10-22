@@ -1,0 +1,821 @@
+<!--
+  STOCKWISE MY — SME INVENTORY & E-INVOICE MANAGEMENT
+  Single-file website prototype.
+
+  Features:
+  1. Overview dashboard: orders, revenue, costs, discounts, gross profit.
+  2. Inventory: SKU, category, cost, selling price and stock balance.
+  3. Record: stock-in/stock-out, manual entry and chat screenshot upload.
+  4. History: searchable supplier/customer transaction records.
+  5. E-Invoice: draft, validation checklist, preview, QR placeholder and export.
+  6. Local persistence: records stay in this browser on this device.
+
+  IMPORTANT BEFORE COMMERCIAL USE:
+  - This is a front-end prototype, NOT a certified or legally compliant
+    Malaysian e-Invoice submission system.
+  - Connect a secure backend to LHDN MyInvois APIs for actual submission,
+    validation, official UUID/validation links and QR generation.
+  - Add real OCR and human review before importing chat screenshots.
+  - Production deployment needs authentication, role-based access,
+    encryption, backups, audit logs and secure server-side storage.
+  - Never treat a locally generated QR code as an official LHDN QR code.
+  - Tax fields, TIN, SST, classification codes and exemptions must be
+    validated against the latest applicable LHDN requirements.
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StockWise MY | SME Management</title>
+<style>
+:root{
+  --bg:#f5f7fb;--surface:#fff;--text:#182230;--muted:#718096;
+  --primary:#3659d9;--primary-light:#edf1ff;--border:#e5e9f2;
+  --green:#168568;--green-bg:#e6f7f1;--red:#c44949;--red-bg:#fff0f0;
+  --amber:#986b12;--amber-bg:#fff5d9;--radius:15px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input,select,textarea{font:inherit}
+button{cursor:pointer}
+.app{min-height:100vh;display:flex}
+.sidebar{width:245px;background:#fff;border-right:1px solid var(--border);
+  padding:25px 16px;position:fixed;inset:0 auto 0 0;display:flex;
+  flex-direction:column;z-index:10}
+.brand{display:flex;align-items:center;gap:11px;padding:0 10px 30px}
+.brand-icon{width:40px;height:40px;border-radius:12px;background:var(--primary);
+  color:white;display:grid;place-items:center;font-size:21px;font-weight:800}
+.brand h2{font-size:17px;margin:0}
+.brand small{font-size:11px;color:var(--muted)}
+.nav-label{font-size:10px;font-weight:800;letter-spacing:1.2px;
+  color:#9aa4b4;padding:12px 12px}
+.nav{display:flex;align-items:center;gap:12px;width:100%;border:0;
+  background:transparent;padding:13px 12px;border-radius:10px;
+  text-align:left;color:#647085;font-size:13px;margin-bottom:4px}
+.nav:hover,.nav.active{background:var(--primary-light);color:var(--primary)}
+.nav .ico{width:20px;text-align:center;font-size:17px}
+.sidebar-bottom{margin-top:auto;border-top:1px solid var(--border);
+  padding:18px 10px 0;color:var(--muted);font-size:11px;line-height:1.7}
+.main{margin-left:245px;width:calc(100% - 245px);padding:28px 34px 50px}
+.topbar{display:flex;justify-content:space-between;align-items:center;
+  gap:15px;margin-bottom:28px}
+.topbar h1{font-size:25px;letter-spacing:-.6px;margin:0 0 6px}
+.subtitle{font-size:12px;color:var(--muted)}
+.top-actions{display:flex;gap:9px;align-items:center}
+.avatar{width:35px;height:35px;background:#e3e9ff;color:var(--primary);
+  display:grid;place-items:center;border-radius:50%;font-weight:800;font-size:12px}
+.btn{border:1px solid var(--border);background:white;color:var(--text);
+  padding:10px 14px;border-radius:9px;font-size:12px;font-weight:700}
+.btn:hover{filter:brightness(.97)}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:white}
+.btn.success{background:var(--green);border-color:var(--green);color:white}
+.btn.danger{color:var(--red);border-color:#f1d2d2}
+.btn.small{padding:7px 10px;font-size:11px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.page{display:none}.page.active{display:block}
+.grid{display:grid;gap:17px}
+.metrics{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:20px}
+.card{background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:20px;min-width:0}
+.metric-label{font-size:12px;color:var(--muted);margin-bottom:14px}
+.metric-value{font-size:25px;font-weight:800;letter-spacing:-.7px}
+.metric-foot{font-size:11px;color:var(--muted);margin-top:10px}
+.metric-icon{float:right;width:34px;height:34px;border-radius:10px;
+  display:grid;place-items:center;background:var(--primary-light);color:var(--primary)}
+.section-grid{grid-template-columns:minmax(0,1.55fr) minmax(280px,1fr)}
+.card-head{display:flex;align-items:center;justify-content:space-between;
+  gap:10px;margin-bottom:17px}
+.card-head h3{font-size:15px;margin:0}
+.card-head p{font-size:11px;color:var(--muted);margin:5px 0 0}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;white-space:nowrap}
+th{text-align:left;font-size:10px;color:var(--muted);font-weight:700;
+  padding:11px 10px;border-bottom:1px solid var(--border)}
+td{padding:13px 10px;border-bottom:1px solid #f0f2f7;font-size:11px}
+tbody tr:last-child td{border-bottom:0}
+.muted{color:var(--muted)}
+.strong{font-weight:750}
+.pill{display:inline-block;padding:5px 8px;border-radius:20px;
+  font-size:10px;font-weight:700}
+.pill.green{background:var(--green-bg);color:var(--green)}
+.pill.red{background:var(--red-bg);color:var(--red)}
+.pill.amber{background:var(--amber-bg);color:var(--amber)}
+.pill.blue{background:var(--primary-light);color:var(--primary)}
+.stock-list{display:flex;flex-direction:column;gap:17px}
+.stock-row{display:flex;justify-content:space-between;gap:12px}
+.stock-name{font-size:12px;font-weight:700}
+.stock-sub{font-size:10px;color:var(--muted);margin-top:5px}
+.stock-right{text-align:right;font-size:12px;font-weight:800}
+.progress{height:5px;background:#eef0f6;border-radius:8px;margin-top:10px;overflow:hidden}
+.progress span{height:100%;display:block;background:var(--primary);border-radius:8px}
+.page-intro{display:flex;justify-content:space-between;align-items:center;
+  gap:12px;margin-bottom:20px}
+.page-intro h2{font-size:18px;margin:0 0 5px}
+.page-intro p{font-size:12px;color:var(--muted);margin:0}
+.toolbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:15px}
+.field{display:flex;flex-direction:column;gap:7px;min-width:0}
+.field label{font-size:11px;color:#556176;font-weight:750}
+.field input,.field select,.field textarea,.search{
+  width:100%;border:1px solid #dfe4ee;border-radius:9px;padding:11px 12px;
+  background:#fff;color:var(--text);font-size:12px;outline:none}
+.field input:focus,.field select:focus,.field textarea:focus,.search:focus{
+  border-color:var(--primary);box-shadow:0 0 0 3px #3659d915}
+.field textarea{resize:vertical;min-height:75px}
+.search{width:min(320px,100%)}
+.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.full{grid-column:1/-1}
+.form-actions{display:flex;gap:9px;justify-content:flex-end;margin-top:20px}
+.help{font-size:10px;color:var(--muted);line-height:1.6}
+.notice{padding:13px 15px;border-radius:10px;background:#edf3ff;color:#3151a7;
+  font-size:11px;line-height:1.7;margin-bottom:16px}
+.notice.warning{background:var(--amber-bg);color:#805b10}
+.notice.success{background:var(--green-bg);color:#126e55}
+.empty{text-align:center;padding:35px 12px;color:var(--muted);font-size:12px}
+.product-lines{width:100%;border:1px solid var(--border);border-radius:10px;
+  overflow:hidden}
+.product-line{display:grid;grid-template-columns:minmax(120px,2fr) 70px 100px 100px 34px;
+  gap:8px;align-items:end;padding:10px;border-bottom:1px solid var(--border)}
+.product-line:last-child{border-bottom:0}
+.product-line .field input,.product-line .field select{padding:9px 7px}
+.remove-line{height:34px;border:0;background:var(--red-bg);color:var(--red);border-radius:7px}
+.totals{margin-left:auto;max-width:300px;padding-top:16px}
+.total-row{display:flex;justify-content:space-between;gap:15px;padding:7px 0;font-size:12px}
+.total-row.final{border-top:1px solid var(--border);font-size:15px;font-weight:800;margin-top:5px;padding-top:14px}
+.stepper{display:flex;gap:8px;margin-bottom:20px}
+.step{flex:1;padding:12px;border-radius:10px;background:#eef0f6;color:var(--muted);font-size:11px;font-weight:700}
+.step.active{background:var(--primary-light);color:var(--primary)}
+.review-item{display:flex;justify-content:space-between;gap:15px;padding:12px 0;
+  border-bottom:1px solid var(--border);font-size:12px}
+.review-item:last-child{border-bottom:0}
+.invoice-paper{max-width:750px;margin:0 auto;border:1px solid var(--border);
+  border-radius:12px;padding:30px;background:white}
+.invoice-paper h2{font-size:21px;margin:0 0 5px}
+.invoice-paper h4{margin:25px 0 10px;font-size:12px}
+.invoice-top{display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap}
+.invoice-meta{font-size:11px;color:var(--muted);line-height:1.8}
+.invoice-total{text-align:right;margin-top:20px;font-size:14px;font-weight:800}
+.qr-placeholder{width:90px;height:90px;border:1px dashed #aab2c0;display:grid;
+  place-items:center;text-align:center;font-size:10px;color:var(--muted);padding:8px}
+.modal-backdrop{display:none;position:fixed;inset:0;background:#14203980;z-index:30;
+  align-items:center;justify-content:center;padding:15px}
+.modal-backdrop.open{display:flex}
+.modal{background:white;border-radius:16px;width:min(680px,100%);max-height:90vh;
+  overflow-y:auto;padding:24px}
+.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.modal-head h3{margin:0;font-size:17px}
+.toast{position:fixed;right:20px;bottom:20px;background:#192536;color:white;
+  padding:13px 18px;border-radius:10px;font-size:12px;z-index:60;
+  opacity:0;transform:translateY(10px);transition:.2s;pointer-events:none}
+.toast.show{opacity:1;transform:translateY(0)}
+.mobile-menu{display:none}
+@media(max-width:1100px){
+  .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .section-grid{grid-template-columns:1fr}
+  .main{padding:23px}
+}
+@media(max-width:720px){
+  .sidebar{display:none}.main{margin-left:0;width:100%;padding:18px 13px}
+  .mobile-menu{display:inline-block}
+  .topbar h1{font-size:21px}.topbar{align-items:flex-start}
+  .metrics{gap:10px}.card{padding:15px}
+  .metric-value{font-size:21px}.form-grid{grid-template-columns:1fr}
+  .full{grid-column:auto}.product-line{grid-template-columns:1fr 1fr}
+  .product-line .field:first-child{grid-column:1/-1}
+  .form-actions{flex-wrap:wrap}
+  .invoice-paper{padding:17px}
+}
+@media print{
+  .sidebar,.topbar,.page-intro,.toolbar,.no-print,.notice{display:none!important}
+  .main{margin:0;width:100%;padding:0}
+  .page{display:none!important}.page.printing{display:block!important}
+  .invoice-paper{border:0;padding:0;max-width:none}
+  body{background:white}
+}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-icon">S</div>
+    <div><h2>StockWise MY</h2><small>SME Business Manager</small></div>
+  </div>
+  <div class="nav-label">WORKSPACE</div>
+  <button class="nav active" data-page="overview"><span class="ico">▦</span> Overview</button>
+  <button class="nav" data-page="inventory"><span class="ico">▤</span> Inventory</button>
+  <button class="nav" data-page="record"><span class="ico">＋</span> Record movement</button>
+  <button class="nav" data-page="history"><span class="ico">◷</span> Transaction history</button>
+  <button class="nav" data-page="invoice"><span class="ico">▧</span> E-Invoice</button>
+  <div class="sidebar-bottom">
+    <strong>Privacy first</strong><br>
+    Demo data is stored in this browser only. This does not provide account-level security or encrypted cloud storage.
+  </div>
+</aside>
+
+<main class="main">
+<header class="topbar">
+  <div>
+    <h1 id="pageTitle">Overview</h1>
+    <div class="subtitle" id="todayText"></div>
+  </div>
+  <div class="top-actions">
+    <button class="btn mobile-menu" onclick="toggleMobileNav()">☰ Menu</button>
+    <button class="btn primary" onclick="openRecord()">＋ New record</button>
+    <div class="avatar">SME</div>
+  </div>
+</header>
+
+<section class="page active" id="page-overview">
+  <div class="grid metrics">
+    <div class="card"><span class="metric-icon">↗️</span><div class="metric-label">Sales recorded</div><div class="metric-value" id="mSales">RM 0.00</div><div class="metric-foot">Customer orders recorded</div></div>
+    <div class="card"><span class="metric-icon">↙️</span><div class="metric-label">Purchase costs</div><div class="metric-value" id="mCosts">RM 0.00</div><div class="metric-foot">Supplier purchases recorded</div></div>
+    <div class="card"><span class="metric-icon">◈</span><div class="metric-label">Gross profit estimate</div><div class="metric-value" id="mProfit">RM 0.00</div><div class="metric-foot">Sales less cost of goods sold</div></div>
+    <div class="card"><span class="metric-icon">▤</span><div class="metric-label">Products in catalogue</div><div class="metric-value" id="mProducts">0</div><div class="metric-foot" id="mUnits">0 units in stock</div></div>
+  </div>
+  <div class="grid section-grid">
+    <div class="card">
+      <div class="card-head"><div><h3>Latest customer orders</h3><p>Items, discounts and estimated profit</p></div><button class="btn small" onclick="navigate('history')">View all</button></div>
+      <div class="table-wrap"><table><thead><tr><th>Customer / date</th><th>Items</th><th>Order total</th><th>Profit est.</th></tr></thead><tbody id="latestOrders"></tbody></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h3>Stock alerts</h3><p>Products that may need replenishment</p></div><button class="btn small" onclick="navigate('inventory')">Inventory</button></div>
+      <div id="stockAlerts" class="stock-list"></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:18px">
+    <div class="card-head"><div><h3>Recent stock movement</h3><p>Latest stock-in and stock-out activity</p></div><button class="btn small" onclick="navigate('history')">Full history</button></div>
+    <div class="table-wrap"><table><thead><tr><th>Date</th><th>Reference</th><th>Party</th><th>Type</th><th>Amount</th><th>Status</th></tr></thead><tbody id="recentMoves"></tbody></table></div>
+  </div>
+</section>
+
+<section class="page" id="page-inventory">
+  <div class="page-intro"><div><h2>Product catalogue</h2><p>Manage SKUs, categories, pricing and available stock.</p></div><button class="btn primary" onclick="openProduct()">＋ Add product</button></div>
+  <div class="card">
+    <div class="toolbar">
+      <input class="search" id="inventorySearch" placeholder="Search SKU, product or category..." oninput="renderInventory()">
+      <select class="search" id="categoryFilter" onchange="renderInventory()"><option value="">All categories</option></select>
+      <button class="btn" onclick="exportInventory()">Export CSV</button>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>SKU / product</th><th>Category</th><th>Cost price</th><th>Selling price</th><th>Stock balance</th><th>Stock value</th><th>Actions</th></tr></thead><tbody id="inventoryBody"></tbody></table></div>
+  </div>
+</section>
+
+<section class="page" id="page-record">
+  <div class="page-intro"><div><h2>Record stock movement</h2><p>Upload a chat screenshot or enter an order manually.</p></div></div>
+  <div class="notice">Simple workflow: upload or enter details → check extracted information → confirm the record. A screenshot is not automatically interpreted in this demo. In production, connect private OCR and require your approval before saving.</div>
+  <div class="card">
+    <div class="stepper"><div class="step active" id="step1">1. Enter details</div><div class="step" id="step2">2. Review</div><div class="step" id="step3">3. Saved</div></div>
+    <div id="recordEntry">
+      <div class="form-grid">
+        <div class="field"><label>Movement type *</label><select id="rType" onchange="updateMovementLabels()"><option value="sale">Stock out — customer order</option><option value="purchase">Stock in — supplier purchase</option><option value="adjustment_in">Stock adjustment — increase</option><option value="adjustment_out">Stock adjustment — decrease</option></select></div>
+        <div class="field"><label>Customer / supplier name *</label><input id="rParty" placeholder="Enter name or business name"></div>
+        <div class="field"><label>Transaction date *</label><input type="date" id="rDate"></div>
+        <div class="field"><label>Reference / order number</label><input id="rRef" placeholder="Optional reference"></div>
+        <div class="field full"><label>Upload chat screenshot / order document</label><input id="rFile" type="file" accept="image/*,.pdf" onchange="showAttachment()"><div class="help" id="fileInfo">Supported in this demo: image or PDF attachment. OCR is not enabled.</div><img id="attachmentPreview" alt="Uploaded preview" style="display:none;max-width:220px;max-height:180px;border-radius:8px;margin-top:8px"></div>
+        <div class="field full"><label>Notes</label><textarea id="rNotes" placeholder="Optional details, payment status or delivery notes"></textarea></div>
+      </div>
+      <div style="margin-top:20px">
+        <div class="card-head"><div><h3 id="lineTitle">Items sold to customer</h3><p>Select products from your catalogue.</p></div><button class="btn small" onclick="addLine()">＋ Add item</button></div>
+        <div class="product-lines" id="productLines"></div>
+      </div>
+      <div class="totals">
+        <div class="total-row"><span>Subtotal</span><strong id="rSubtotal">RM 0.00</strong></div>
+        <div class="total-row"><span>Discount</span><strong id="rDiscount">RM 0.00</strong></div>
+        <div class="total-row final"><span>Total</span><strong id="rTotal">RM 0.00</strong></div>
+      </div>
+      <div class="form-actions"><button class="btn" onclick="resetRecord()">Clear</button><button class="btn primary" onclick="reviewRecord()">Review record →</button></div>
+    </div>
+    <div id="recordReview" style="display:none">
+      <div class="notice warning">Check every item, price, quantity, discount and total against the original order. No stock will change until you confirm.</div>
+      <div id="reviewSummary"></div>
+      <div class="form-actions"><button class="btn" onclick="backToEntry()">← Edit details</button><button class="btn success" onclick="confirmRecord()">✓ Confirm and save</button></div>
+    </div>
+    <div id="recordSaved" style="display:none">
+      <div class="notice success">Record saved and stock balance updated.</div>
+      <div id="savedSummary"></div>
+      <div class="form-actions"><button class="btn" onclick="resetRecord()">Record another</button><button class="btn primary" onclick="navigate('history')">View history</button><button class="btn" onclick="navigate('invoice')">Create e-Invoice draft</button></div>
+    </div>
+  </div>
+</section>
+
+<section class="page" id="page-history">
+  <div class="page-intro"><div><h2>Transaction history</h2><p>Find customer orders, supplier purchases or an individual SKU.</p></div><button class="btn" onclick="exportHistory()">Export CSV</button></div>
+  <div class="card">
+    <div class="toolbar">
+      <input class="search" id="historySearch" placeholder="Search name, SKU, reference..." oninput="renderHistory()">
+      <select class="search" id="historyType" onchange="renderHistory()"><option value="">All movements</option><option value="sale">Customer order</option><option value="purchase">Supplier purchase</option><option value="adjustment_in">Stock increase</option><option value="adjustment_out">Stock decrease</option></select>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Date / reference</th><th>Party</th><th>Type</th><th>Items</th><th>Amount</th><th>Payment</th><th>Details</th></tr></thead><tbody id="historyBody"></tbody></table></div>
+  </div>
+  <div class="card" id="historyDetail" style="margin-top:18px;display:none"></div>
+</section>
+
+<section class="page" id="page-invoice">
+  <div class="page-intro"><div><h2>E-Invoice workspace</h2><p>Prepare a draft from an existing transaction, review it, and validate required fields.</p></div></div>
+  <div class="notice warning"><strong>Important:</strong> A locally generated document is not an official Malaysian e-Invoice. Actual issuance requires the applicable LHDN MyInvois submission and validation workflow. The TIN, classification, tax and QR details below must be verified; this demo cannot submit invoices to LHDN.</div>
+  <div class="card">
+    <div class="form-grid">
+      <div class="field"><label>Choose transaction *</label><select id="invTransaction" onchange="loadInvoiceTransaction()"><option value="">Select a saved transaction</option></select></div>
+      <div class="field"><label>Document type</label><select id="invType"><option value="Invoice">Invoice</option><option value="Credit Note">Credit Note</option><option value="Debit Note">Debit Note</option><option value="Refund Note">Refund Note</option></select></div>
+      <div class="field"><label>Seller legal name *</label><input id="sellerName" placeholder="Registered business name"></div>
+      <div class="field"><label>Seller TIN *</label><input id="sellerTin" placeholder="Verify with LHDN"></div>
+      <div class="field"><label>Seller registration number *</label><input id="sellerReg" placeholder="SSM / applicable registration"></div>
+      <div class="field"><label>Seller MSIC code *</label><input id="sellerMsic" placeholder="5-digit MSIC code"></div>
+      <div class="field"><label>Seller address *</label><textarea id="sellerAddress" placeholder="Registered business address"></textarea></div>
+      <div class="field"><label>Seller email</label><input type="email" id="sellerEmail" placeholder="business@example.com"></div>
+      <div class="field"><label>Buyer / supplier legal name *</label><input id="buyerName" placeholder="Registered name"></div>
+      <div class="field"><label>Buyer TIN *</label><input id="buyerTin" placeholder="Verify buyer TIN"></div>
+      <div class="field"><label>Buyer registration / ID number *</label><input id="buyerReg" placeholder="Applicable registration or ID"></div>
+      <div class="field"><label>Buyer email</label><input type="email" id="buyerEmail" placeholder="recipient@example.com"></div>
+      <div class="field"><label>Buyer address *</label><textarea id="buyerAddress" placeholder="Buyer address"></textarea></div>
+      <div class="field"><label>Currency</label><select id="invCurrency"><option value="MYR">MYR — Malaysian Ringgit</option></select></div>
+      <div class="field"><label>Payment status *</label><select id="invPayment"><option value="">Select status</option><option>Paid</option><option>Partially paid</option><option>Unpaid</option></select></div>
+      <div class="field"><label>Payment amount received / paid (RM) *</label><input type="number" id="invPaid" min="0" step="0.01" placeholder="0.00"></div>
+      <div class="field"><label>Payment method</label><select id="invMethod"><option value="">Not specified</option><option>Cash</option><option>Bank transfer</option><option>Card</option><option>E-wallet</option><option>Other</option></select></div>
+    </div>
+    <div class="form-actions"><button class="btn" onclick="clearInvoiceFields()">Clear invoice details</button><button class="btn primary" onclick="previewInvoice()">Validate & preview →</button></div>
+  </div>
+  <div id="invoicePreviewArea" style="display:none;margin-top:20px">
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head"><div><h3>Validation checklist</h3><p>Resolve every blocking item before official submission.</p></div><span class="pill amber" id="validationBadge">Draft only</span></div>
+      <div id="validationResults"></div>
+      <div class="help">Passing this local checklist does not guarantee LHDN acceptance. Validation must be performed against the latest MyInvois schema, business rules and tax requirements.</div>
+      <div class="form-actions"><button class="btn" onclick="window.print()">Print / save PDF</button><button class="btn" onclick="downloadInvoiceJSON()">Export draft JSON</button><button class="btn primary" onclick="confirmInvoice()">Confirm draft</button></div>
+    </div>
+    <div id="invoicePaper" class="invoice-paper"></div>
+    <div class="card" style="margin-top:15px">
+      <h3 style="font-size:14px">Sending to recipient</h3>
+      <p class="help">Email sending is not configured. Download the draft, verify the final invoice and use your business email. Production email should send only the recipient's document after permission and address checks.</p>
+      <div class="toolbar"><button class="btn" onclick="emailInvoice()">Prepare email draft</button><button class="btn" onclick="downloadInvoiceHTML()">Download invoice HTML</button></div>
+      <div class="help" id="emailStatus"></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:18px">
+    <div class="card-head"><div><h3>Prepared invoice drafts</h3><p>Drafts created in this browser.</p></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Draft ID</th><th>Transaction</th><th>Recipient</th><th>Amount</th><th>Status</th></tr></thead><tbody id="invoiceHistoryBody"></tbody></table></div>
+  </div>
+</section>
+</main>
+</div>
+
+<div class="modal-backdrop" id="productModal">
+<div class="modal">
+  <div class="modal-head"><h3 id="productModalTitle">Add product</h3><button class="btn small" onclick="closeModal('productModal')">✕</button></div>
+  <div class="form-grid">
+    <div class="field"><label>Product name *</label><input id="pName" placeholder="e.g. Blue ballpoint pen"></div>
+    <div class="field"><label>Category *</label><input id="pCategory" list="categoryOptions" placeholder="e.g. Stationery"><datalist id="categoryOptions"><option>Stationery</option><option>Toys</option><option>Accessories</option><option>Home & Living</option><option>Electronics</option><option>Clothing</option><option>Other</option></datalist></div>
+    <div class="field"><label>SKU / stock code</label><input id="pSku" placeholder="Auto-generated if blank"></div>
+    <div class="field"><label>Opening / current quantity *</label><input id="pStock" type="number" min="0" step="1" value="0"></div>
+    <div class="field"><label>Cost price per unit (RM) *</label><input id="pCost" type="number" min="0" step="0.01" value="0"></div>
+    <div class="field"><label>Selling price per unit (RM) *</label><input id="pPrice" type="number" min="0" step="0.01" value="0"></div>
+    <div class="field"><label>Low-stock alert threshold</label><input id="pThreshold" type="number" min="0" step="1" value="5"></div>
+    <div class="field"><label>Classification code (optional)</label><input id="pClass" placeholder="Verify applicable LHDN code"></div>
+  </div>
+  <div class="form-actions"><button class="btn" onclick="closeModal('productModal')">Cancel</button><button class="btn primary" onclick="saveProduct()">Save product</button></div>
+</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+/*
+  Demo storage only. localStorage is NOT secure storage:
+  do not use this demo to store real customers' confidential data.
+  For production, use authenticated server APIs, encrypted database storage,
+  access controls, backups and audited invoice submission.
+*/
+const STORAGE_KEY = "stockwise_my_demo_v1";
+const money = n => "RM " + Number(n || 0).toLocaleString("en-MY",{minimumFractionDigits:2,maximumFractionDigits:2});
+const esc = s => String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const uid = prefix => prefix + "-" + Date.now().toString(36).toUpperCase() + "-" + Math.random().toString(36).slice(2,6).toUpperCase();
+const today = () => new Date().toISOString().slice(0,10);
+let editingProductId = null;
+let recordDraft = null;
+let selectedAttachment = "";
+let currentInvoice = null;
+let activeHistoryId = null;
+
+function initialData(){
+  const products=[
+    {id:"p1",sku:"S0001",name:"Blue Ballpoint Pen",category:"Stationery",cost:0.65,price:1.5,stock:120,threshold:20,classCode:""},
+    {id:"p2",sku:"S0002",name:"A5 Notebook",category:"Stationery",cost:2.2,price:4.5,stock:45,threshold:10,classCode:""},
+    {id:"p3",sku:"T0001",name:"Mini Building Blocks",category:"Toys",cost:8,price:15.9,stock:8,threshold:10,classCode:""},
+    {id:"p4",sku:"A0001",name:"Canvas Tote Bag",category:"Accessories",cost:5.5,price:12,stock:30,threshold:8,classCode:""}
+  ];
+  return {products,transactions:[],invoices:[],settings:{businessName:""}};
+}
+function loadData(){
+  try{
+    const raw=localStorage.getItem(STORAGE_KEY);
+    if(!raw)return initialData();
+    const d=JSON.parse(raw);
+    if(!Array.isArray(d.products)||!Array.isArray(d.transactions)||!Array.isArray(d.invoices))return initialData();
+    return d;
+  }catch(e){return initialData()}
+}
+let db=loadData();
+function persist(){
+  try{localStorage.setItem(STORAGE_KEY,JSON.stringify(db));return true}
+  catch(e){toast("Unable to save. Browser storage may be full.");return false}
+}
+function toast(msg){
+  const el=document.getElementById("toast");el.textContent=msg;el.classList.add("show");
+  setTimeout(()=>el.classList.remove("show"),2600);
+}
+function navigate(page){
+  document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));
+  document.getElementById("page-"+page).classList.add("active");
+  document.querySelectorAll(".nav").forEach(n=>n.classList.toggle("active",n.dataset.page===page));
+  const names={overview:"Overview",inventory:"Inventory",record:"Record movement",history:"Transaction history",invoice:"E-Invoice"};
+  document.getElementById("pageTitle").textContent=names[page]||"StockWise MY";
+  if(page==="inventory")renderInventory();
+  if(page==="history")renderHistory();
+  if(page==="invoice"){refreshInvoiceTransactions();renderInvoiceHistory()}
+  window.scrollTo({top:0,behavior:"smooth"});
+}
+document.querySelectorAll(".nav").forEach(b=>b.addEventListener("click",()=>navigate(b.dataset.page)));
+function toggleMobileNav(){
+  const sidebar=document.querySelector(".sidebar");
+  const open=sidebar.style.display==="flex";
+  sidebar.style.cssText=open?"":"display:flex;position:fixed;inset:0 auto 0 0;box-shadow:0 0 0 100vw #14203966";
+}
+document.getElementById("todayText").textContent=new Date().toLocaleDateString("en-MY",{weekday:"long",year:"numeric",month:"long",day:"numeric"});
+function getProduct(id){return db.products.find(p=>p.id===id)}
+function typeLabel(type){
+  return ({sale:"Customer order",purchase:"Supplier purchase",adjustment_in:"Stock increase",adjustment_out:"Stock decrease"})[type]||type;
+}
+function amountFor(tx){return tx.total||0}
+function grossProfit(tx){
+  if(tx.type!=="sale")return null;
+  return tx.lines.reduce((s,l)=>s+(Number(l.price)-Number(l.cost))*Number(l.qty),0)-Number(tx.discount||0);
+}
+function unitsInStock(){return db.products.reduce((s,p)=>s+Number(p.stock||0),0)}
+function renderAll(){
+  renderOverview();renderInventory();renderHistory();refreshInvoiceTransactions();renderInvoiceHistory();
+}
+function renderOverview(){
+  const sales=db.transactions.filter(t=>t.type==="sale").reduce((s,t)=>s+t.total,0);
+  const costs=db.transactions.filter(t=>t.type==="purchase").reduce((s,t)=>s+t.total,0);
+  const profit=db.transactions.reduce((s,t)=>s+(grossProfit(t)||0),0);
+  document.getElementById("mSales").textContent=money(sales);
+  document.getElementById("mCosts").textContent=money(costs);
+  document.getElementById("mProfit").textContent=money(profit);
+  document.getElementById("mProducts").textContent=db.products.length;
+  document.getElementById("mUnits").textContent=unitsInStock()+" units in stock";
+  const latest=db.transactions.filter(t=>t.type==="sale").slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,6);
+  document.getElementById("latestOrders").innerHTML=latest.length?latest.map(t=>`<tr>
+    <td><div class="strong">${esc(t.party)}</div><div class="muted">${esc(t.date)}</div></td>
+    <td>${t.lines.reduce((s,l)=>s+l.qty,0)} units<br><span class="muted">${t.lines.length} product(s)</span></td>
+    <td class="strong">${money(t.total)}<br><span class="muted">Disc. ${money(t.discount)}</span></td>
+    <td class="strong" style="color:var(--green)">${money(grossProfit(t))}</td></tr>`).join(""):`<tr><td colspan="4"><div class="empty">No customer orders yet. Create your first record.</div></td></tr>`;
+  const alerts=db.products.filter(p=>p.stock<=p.threshold).sort((a,b)=>a.stock-b.stock).slice(0,6);
+  document.getElementById("stockAlerts").innerHTML=alerts.length?alerts.map(p=>`<div>
+    <div class="stock-row"><div><div class="stock-name">${esc(p.name)}</div><div class="stock-sub">${esc(p.sku)} · ${esc(p.category)}</div></div>
+    <div class="stock-right" style="color:${p.stock===0?"var(--red)":"var(--amber)"}">${p.stock} left</div></div>
+    <div class="progress"><span style="width:${Math.min(100,p.threshold?100*p.stock/p.threshold:100)}%;background:${p.stock===0?"var(--red)":"#d8a332"}"></span></div>
+  </div>`).join(""):`<div class="empty">All products are above their low-stock threshold.</div>`;
+  const recent=db.transactions.slice().sort((a,b)=>(b.createdAt||b.date).localeCompare(a.createdAt||a.date)).slice(0,7);
+  document.getElementById("recentMoves").innerHTML=recent.length?recent.map(t=>`<tr>
+    <td>${esc(t.date)}</td><td class="strong">${esc(t.ref)}</td><td>${esc(t.party)}</td>
+    <td><span class="pill ${t.type==="sale"?"blue":t.type==="purchase"?"green":"amber"}">${esc(typeLabel(t.type))}</span></td>
+    <td>${money(t.total)}</td><td><span class="pill ${t.paymentStatus==="Paid"?"green":"amber"}">${esc(t.paymentStatus||"Unspecified")}</span></td></tr>`).join(""):`<tr><td colspan="6"><div class="empty">Your recent stock movements will appear here.</div></td></tr>`;
+}
+function categories(){
+  return [...new Set(db.products.map(p=>p.category).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+}
+function refreshCategoryFilter(){
+  const el=document.getElementById("categoryFilter"),old=el.value;
+  el.innerHTML='<option value="">All categories</option>'+categories().map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  el.value=old;
+}
+function renderInventory(){
+  refreshCategoryFilter();
+  const q=(document.getElementById("inventorySearch").value||"").toLowerCase();
+  const cat=document.getElementById("categoryFilter").value;
+  const products=db.products.filter(p=>(!cat||p.category===cat)&&[p.sku,p.name,p.category].some(x=>String(x).toLowerCase().includes(q))).sort((a,b)=>a.category.localeCompare(b.category)||a.sku.localeCompare(b.sku));
+  const body=document.getElementById("inventoryBody");
+  body.innerHTML=products.length?products.map(p=>`<tr>
+    <td><div class="strong">${esc(p.name)}</div><div class="muted">${esc(p.sku)}</div></td>
+    <td><span class="pill blue">${esc(p.category)}</span></td>
+    <td>${money(p.cost)}</td><td>${money(p.price)}</td>
+    <td><span class="pill ${p.stock<=p.threshold?"amber":"green"}">${p.stock} units</span></td>
+    <td>${money(p.stock*p.cost)}</td>
+    <td><button class="btn small" onclick="openProduct('${p.id}')">Edit</button> <button class="btn small danger" onclick="deleteProduct('${p.id}')">Delete</button></td>
+  </tr>`).join(""):`<tr><td colspan="7"><div class="empty">No matching products.</div></td></tr>`;
+}
+function openProduct(id=null){
+  editingProductId=id;
+  const p=id?getProduct(id):null;
+  document.getElementById("productModalTitle").textContent=p?"Edit product":"Add product";
+  document.getElementById("pName").value=p?.name||"";
+  document.getElementById("pCategory").value=p?.category||"Stationery";
+  document.getElementById("pSku").value=p?.sku||"";
+  document.getElementById("pSku").disabled=!!p;
+  document.getElementById("pStock").value=p?.stock??0;
+  document.getElementById("pCost").value=p?.cost??0;
+  document.getElementById("pPrice").value=p?.price??0;
+  document.getElementById("pThreshold").value=p?.threshold??5;
+  document.getElementById("pClass").value=p?.classCode||"";
+  document.getElementById("productModal").classList.add("open");
+}
+function closeModal(id){document.getElementById(id).classList.remove("open")}
+function nextSku(category){
+  const prefix=({Stationery:"S",Toys:"T",Accessories:"A","Home & Living":"H",Electronics:"E",Clothing:"C"})[category]||"P";
+  let max=0;
+  db.products.forEach(p=>{const m=p.sku.match(new RegExp("^"+prefix+"(\\\\d+)$"));if(m)max=Math.max(max,Number(m[1]))});
+  return prefix+String(max+1).padStart(4,"0");
+}
+function saveProduct(){
+  const name=document.getElementById("pName").value.trim(),category=document.getElementById("pCategory").value.trim();
+  const cost=Number(document.getElementById("pCost").value),price=Number(document.getElementById("pPrice").value);
+  const stock=Number(document.getElementById("pStock").value),threshold=Number(document.getElementById("pThreshold").value);
+  if(!name||!category){toast("Enter a product name and category.");return}
+  if([cost,price,stock,threshold].some(n=>!Number.isFinite(n)||n<0)||!Number.isInteger(stock)||!Number.isInteger(threshold)){toast("Check price and stock values.");return}
+  if(editingProductId){
+    const p=getProduct(editingProductId);Object.assign(p,{name,category,cost,price,stock,threshold,classCode:document.getElementById("pClass").value.trim()});
+  }else{
+    const sku=document.getElementById("pSku").value.trim().toUpperCase()||nextSku(category);
+    if(db.products.some(p=>p.sku.toUpperCase()===sku)){toast("That SKU already exists.");return}
+    db.products.push({id:uid("P"),sku,name,category,cost,price,stock,threshold,classCode:document.getElementById("pClass").value.trim()});
+  }
+  persist();closeModal("productModal");renderAll();toast("Product saved.");
+}
+function deleteProduct(id){
+  const p=getProduct(id);if(!p)return;
+  if(db.transactions.some(t=>t.lines.some(l=>l.productId===id))){toast("Cannot delete a product with transaction history. Set stock to zero instead.");return}
+  if(confirm("Delete "+p.name+"?")){db.products=db.products.filter(x=>x.id!==id);persist();renderAll();toast("Product deleted.")}
+}
+function exportCSV(filename,rows){
+  const csv=rows.map(row=>row.map(v=>'"'+String(v??"").replace(/"/g,'""')+'"').join(",")).join("\r\n");
+  const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+  const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);
+}
+function exportInventory(){
+  exportCSV("stockwise-inventory.csv",[["SKU","Product","Category","Cost","Selling price","Stock","Stock value"],...db.products.map(p=>[p.sku,p.name,p.category,p.cost,p.price,p.stock,p.stock*p.cost])]);
+}
+function exportHistory(){
+  exportCSV("stockwise-transactions.csv",[["Date","Reference","Party","Type","Items","Subtotal","Discount","Total","Payment status"],...db.transactions.map(t=>[t.date,t.ref,t.party,typeLabel(t.type),t.lines.map(l=>l.sku+" x "+l.qty).join("; "),t.subtotal,t.discount,t.total,t.paymentStatus])]);
+}
+
+/* RECORD MOVEMENT */
+function openRecord(){navigate("record");resetRecord()}
+function updateMovementLabels(){
+  const type=document.getElementById("rType").value;
+  document.getElementById("lineTitle").textContent=type==="sale"?"Items sold to customer":type==="purchase"?"Items purchased from supplier":"Items for stock adjustment";
+  renderLines();
+}
+function resetRecord(){
+  recordDraft=null;selectedAttachment="";
+  ["rParty","rRef","rNotes"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("rType").value="sale";document.getElementById("rDate").value=today();
+  document.getElementById("rFile").value="";document.getElementById("fileInfo").textContent="Supported in this demo: image or PDF attachment. OCR is not enabled.";
+  document.getElementById("attachmentPreview").style.display="none";
+  document.getElementById("recordEntry").style.display="block";
+  document.getElementById("recordReview").style.display="none";
+  document.getElementById("recordSaved").style.display="none";
+  document.getElementById("step1").classList.add("active");document.getElementById("step2").classList.remove("active");document.getElementById("step3").classList.remove("active");
+  renderLines();updateMovementLabels();
+}
+function showAttachment(){
+  const file=document.getElementById("rFile").files[0];
+  const info=document.getElementById("fileInfo"),img=document.getElementById("attachmentPreview");
+  selectedAttachment="";
+  if(!file){info.textContent="No attachment selected.";img.style.display="none";return}
+  if(file.size>8*1024*1024){document.getElementById("rFile").value="";info.textContent="File exceeds the 8 MB demo limit.";img.style.display="none";return}
+  info.textContent=file.name+" · "+Math.ceil(file.size/1024)+" KB. OCR is not enabled; enter and verify details manually.";
+  if(file.type.startsWith("image/")){
+    const reader=new FileReader();reader.onload=e=>{img.src=e.target.result;img.style.display="block";selectedAttachment=e.target.result};reader.readAsDataURL(file);
+  }else{img.style.display="none";selectedAttachment="";}
+}
+function addLine(line={}){
+  const container=document.getElementById("productLines");
+  const row=document.createElement("div");row.className="product-line";
+  const opts=db.products.map(p=>`<option value="${esc(p.id)}" ${line.productId===p.id?"selected":""}>${esc(p.sku)} — ${esc(p.name)}</option>`).join("");
+  row.innerHTML=`<div class="field"><label>Product</label><select class="line-product" onchange="lineChanged(this)"><option value="">Select product</option>${opts}</select></div>
+    <div class="field"><label>Qty</label><input class="line-qty" type="number" min="1" step="1" value="${line.qty??1}" oninput="calcRecordTotals()"></div>
+    <div class="field"><label>Unit price (RM)</label><input class="line-price" type="number" min="0" step="0.01" value="${line.price??""}" oninput="calcRecordTotals()"></div>
+    <div class="field"><label>Line discount (RM)</label><input class="line-discount" type="number" min="0" step="0.01" value="${line.discount??0}" oninput="calcRecordTotals()"></div>
+    <button class="remove-line" title="Remove item" onclick="this.closest('.product-line').remove();calcRecordTotals()">×</button>`;
+  container.appendChild(row);
+  if(line.productId)lineChanged(row.querySelector(".line-product"),true);
+  calcRecordTotals();
+}
+function renderLines(){document.getElementById("productLines").innerHTML="";addLine()}
+function lineChanged(select,keepPrice=false){
+  const p=getProduct(select.value),row=select.closest(".product-line"),price=row.querySelector(".line-price");
+  if(p&&!keepPrice){const type=document.getElementById("rType").value;price.value=(type==="purchase"||type==="adjustment_in")?p.cost:p.price}
+  calcRecordTotals();
+}
+function collectLines(){
+  return [...document.querySelectorAll(".product-line")].map(row=>{
+    const product=getProduct(row.querySelector(".line-product").value);
+    return product?{
+      productId:product.id,sku:product.sku,name:product.name,category:product.category,
+      qty:Number(row.querySelector(".line-qty").value),price:Number(row.querySelector(".line-price").value),
+      discount:Number(row.querySelector(".line-discount").value),cost:Number(product.cost)
+    }:null;
+  }).filter(Boolean);
+}
+function calcRecordTotals(){
+  const lines=collectLines();
+  const subtotal=lines.reduce((s,l)=>s+l.qty*l.price,0);
+  const discount=lines.reduce((s,l)=>s+l.discount,0);
+  document.getElementById("rSubtotal").textContent=money(subtotal);
+  document.getElementById("rDiscount").textContent=money(discount);
+  document.getElementById("rTotal").textContent=money(Math.max(0,subtotal-discount));
+}
+function validateLines(lines,type){
+  if(!lines.length)return "Add at least one valid product.";
+  for(const l of lines){
+    if(!Number.isInteger(l.qty)||l.qty<=0)return "Each quantity must be a positive whole number.";
+    if(!Number.isFinite(l.price)||l.price<0||!Number.isFinite(l.discount)||l.discount<0)return "Check each item price and discount.";
+    if(l.discount>l.qty*l.price)return "A line discount cannot exceed its line subtotal.";
+    const p=getProduct(l.productId);
+    if(!p)return "A selected product no longer exists.";
+    if((type==="sale"||type==="adjustment_out")&&p.stock<l.qty)return "Insufficient stock for "+p.name+". Available: "+p.stock+".";
+  }
+  return "";
+}
+function reviewRecord(){
+  const type=document.getElementById("rType").value,party=document.getElementById("rParty").value.trim(),date=document.getElementById("rDate").value;
+  const lines=collectLines(),err=validateLines(lines,type);
+  if(!party||!date){toast("Enter a name and transaction date.");return}
+  if(err){toast(err);return}
+  const subtotal=lines.reduce((s,l)=>s+l.qty*l.price,0),discount=lines.reduce((s,l)=>s+l.discount,0);
+  recordDraft={type,party,date,ref:document.getElementById("rRef").value.trim()||uid("TX"),notes:document.getElementById("rNotes").value.trim(),lines,subtotal,discount,total:subtotal-discount,attachment:selectedAttachment,paymentStatus:"Unspecified"};
+  document.getElementById("reviewSummary").innerHTML=`
+    <div class="review-item"><span>Movement</span><strong>${esc(typeLabel(type))}</strong></div>
+    <div class="review-item"><span>Party</span><strong>${esc(party)}</strong></div>
+    <div class="review-item"><span>Date / reference</span><strong>${esc(date)} / ${esc(recordDraft.ref)}</strong></div>
+    <div class="table-wrap"><table><thead><tr><th>SKU / product</th><th>Qty</th><th>Unit price</th><th>Discount</th><th>Line total</th></tr></thead><tbody>${lines.map(l=>`<tr><td>${esc(l.sku)} · ${esc(l.name)}<br><span class="muted">Unit cost: ${money(l.cost)}</span></td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.discount)}</td><td>${money(l.qty*l.price-l.discount)}</td></tr>`).join("")}</tbody></table></div>
+    <div class="totals"><div class="total-row"><span>Subtotal</span><strong>${money(subtotal)}</strong></div><div class="total-row"><span>Discount</span><strong>${money(discount)}</strong></div><div class="total-row final"><span>Total</span><strong>${money(recordDraft.total)}</strong></div></div>
+    <div class="review-item"><span>Attachment</span><strong>${recordDraft.attachment?"Image attached":"No attachment"}</strong></div>
+    <div class="review-item"><span>Notes</span><span>${esc(recordDraft.notes||"—")}</span></div>`;
+  document.getElementById("recordEntry").style.display="none";document.getElementById("recordReview").style.display="block";
+  document.getElementById("step2").classList.add("active");window.scrollTo({top:0,behavior:"smooth"});
+}
+function backToEntry(){
+  document.getElementById("recordEntry").style.display="block";document.getElementById("recordReview").style.display="none";
+  document.getElementById("step2").classList.remove("active");
+}
+function confirmRecord(){
+  if(!recordDraft)return;
+  const err=validateLines(recordDraft.lines,recordDraft.type);if(err){toast(err);backToEntry();return}
+  const tx={...recordDraft,id:uid("TX"),createdAt:new Date().toISOString()};
+  tx.paymentStatus="Unspecified";
+  for(const l of tx.lines){
+    const p=getProduct(l.productId);
+    if(tx.type==="sale"||tx.type==="adjustment_out")p.stock-=l.qty;
+    else if(tx.type==="purchase"||tx.type==="adjustment_in")p.stock+=l.qty;
+  }
+  db.transactions.push(tx);persist();recordDraft=null;
+  document.getElementById("recordEntry").style.display="none";document.getElementById("recordReview").style.display="none";
+  document.getElementById("recordSaved").style.display="block";
+  document.getElementById("savedSummary").innerHTML=`<div class="review-item"><span>Reference</span><strong>${esc(tx.ref)}</strong></div><div class="review-item"><span>Party</span><strong>${esc(tx.party)}</strong></div><div class="review-item"><span>Recorded total</span><strong>${money(tx.total)}</strong></div><div class="review-item"><span>Stock updated</span><strong>${esc(typeLabel(tx.type))}</strong></div>`;
+  document.getElementById("step3").classList.add("active");renderAll();toast("Transaction saved.");
+}
+
+/* TRANSACTION HISTORY */
+function renderHistory(){
+  const q=(document.getElementById("historySearch").value||"").toLowerCase(),type=document.getElementById("historyType").value;
+  const list=db.transactions.filter(t=>(!type||t.type===type)&&[t.party,t.ref,...t.lines.flatMap(l=>[l.sku,l.name])].some(x=>String(x).toLowerCase().includes(q))).sort((a,b)=>b.date.localeCompare(a.date));
+  document.getElementById("historyBody").innerHTML=list.length?list.map(t=>`<tr>
+    <td><div class="strong">${esc(t.date)}</div><div class="muted">${esc(t.ref)}</div></td><td>${esc(t.party)}</td>
+    <td><span class="pill ${t.type==="sale"?"blue":t.type==="purchase"?"green":"amber"}">${esc(typeLabel(t.type))}</span></td>
+    <td>${t.lines.reduce((s,l)=>s+l.qty,0)} units / ${t.lines.length} products</td><td class="strong">${money(t.total)}</td>
+    <td>${esc(t.paymentStatus||"Unspecified")}</td><td><button class="btn small" onclick="showHistoryDetail('${t.id}')">View</button></td></tr>`).join(""):`<tr><td colspan="7"><div class="empty">No matching transactions.</div></td></tr>`;
+}
+function showHistoryDetail(id){
+  const t=db.transactions.find(x=>x.id===id);if(!t)return;activeHistoryId=id;
+  const box=document.getElementById("historyDetail");box.style.display="block";
+  box.innerHTML=`<div class="card-head"><div><h3>Transaction details</h3><p>${esc(t.ref)} · ${esc(t.date)}</p></div><button class="btn small" onclick="document.getElementById('historyDetail').style.display='none'">Close</button></div>
+    <div class="review-item"><span>Party</span><strong>${esc(t.party)}</strong></div>
+    <div class="review-item"><span>Movement</span><strong>${esc(typeLabel(t.type))}</strong></div>
+    <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Product</th><th>Qty</th><th>Unit cost</th><th>Unit price</th><th>Discount</th><th>Line total</th></tr></thead><tbody>${t.lines.map(l=>`<tr><td>${esc(l.sku)}</td><td>${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.cost)}</td><td>${money(l.price)}</td><td>${money(l.discount)}</td><td>${money(l.qty*l.price-l.discount)}</td></tr>`).join("")}</tbody></table></div>
+    <div class="totals"><div class="total-row"><span>Subtotal</span><strong>${money(t.subtotal)}</strong></div><div class="total-row"><span>Discount</span><strong>${money(t.discount)}</strong></div><div class="total-row final"><span>Total</span><strong>${money(t.total)}</strong></div></div>
+    <div class="review-item"><span>Gross profit estimate</span><strong>${t.type==="sale"?money(grossProfit(t)):"Not applicable"}</strong></div>
+    <div class="review-item"><span>Payment status</span><strong>${esc(t.paymentStatus||"Unspecified")}</strong></div>
+    <div class="review-item"><span>Notes</span><span>${esc(t.notes||"—")}</span></div>
+    <div class="form-actions"><button class="btn primary" onclick="navigate('invoice');document.getElementById('invTransaction').value='${t.id}';loadInvoiceTransaction()">Prepare e-Invoice draft</button></div>`;
+  box.scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+/* E-INVOICE DRAFT WORKFLOW */
+function refreshInvoiceTransactions(){
+  const el=document.getElementById("invTransaction"),old=el.value;
+  el.innerHTML='<option value="">Select a saved transaction</option>'+db.transactions.slice().sort((a,b)=>b.date.localeCompare(a.date)).map(t=>`<option value="${esc(t.id)}">${esc(t.ref)} · ${esc(t.party)} · ${money(t.total)}</option>`).join("");
+  if(db.transactions.some(t=>t.id===old))el.value=old;
+}
+function loadInvoiceTransaction(){
+  const tx=db.transactions.find(t=>t.id===document.getElementById("invTransaction").value);
+  if(!tx)return;
+  document.getElementById("buyerName").value=tx.party;
+  document.getElementById("invPaid").value=tx.paymentStatus==="Paid"?tx.total:"";
+  currentInvoice=null;
+  document.getElementById("invoicePreviewArea").style.display="none";
+}
+function clearInvoiceFields(){
+  ["sellerName","sellerTin","sellerReg","sellerMsic","sellerAddress","sellerEmail","buyerName","buyerTin","buyerReg","buyerEmail","buyerAddress","invPaid"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("invPayment").value="";document.getElementById("invMethod").value="";
+  document.getElementById("invoicePreviewArea").style.display="none";currentInvoice=null;
+}
+function invoiceData(){
+  const tx=db.transactions.find(t=>t.id===document.getElementById("invTransaction").value);
+  return {
+    tx,docType:document.getElementById("invType").value,
+    seller:{name:document.getElementById("sellerName").value.trim(),tin:document.getElementById("sellerTin").value.trim(),reg:document.getElementById("sellerReg").value.trim(),msic:document.getElementById("sellerMsic").value.trim(),address:document.getElementById("sellerAddress").value.trim(),email:document.getElementById("sellerEmail").value.trim()},
+    buyer:{name:document.getElementById("buyerName").value.trim(),tin:document.getElementById("buyerTin").value.trim(),reg:document.getElementById("buyerReg").value.trim(),address:document.getElementById("buyerAddress").value.trim(),email:document.getElementById("buyerEmail").value.trim()},
+    currency:document.getElementById("invCurrency").value,payment:document.getElementById("invPayment").value,
+    paid:document.getElementById("invPaid").value,method:document.getElementById("invMethod").value
+  };
+}
+function validateInvoice(d){
+  const errors=[];
+  if(!d.tx)errors.push("Select a saved transaction.");
+  if(!d.seller.name)errors.push("Enter the seller's legal name.");
+  if(!d.seller.tin)errors.push("Enter and verify the seller's TIN.");
+  if(!d.seller.reg)errors.push("Enter the seller's registration number.");
+  if(!d.seller.msic)errors.push("Enter the seller's MSIC code.");
+  if(!d.seller.address)errors.push("Enter the seller's address.");
+  if(!d.buyer.name)errors.push("Enter the buyer / recipient legal name.");
+  if(!d.buyer.tin)errors.push("Enter and verify the buyer's TIN, or the applicable documented exemption workflow.");
+  if(!d.buyer.reg)errors.push("Enter the buyer's applicable registration / ID number.");
+  if(!d.buyer.address)errors.push("Enter the buyer's address.");
+  if(!d.payment)errors.push("Select the payment status.");
+  if(d.paid===""||!Number.isFinite(Number(d.paid))||Number(d.paid)<0)errors.push("Enter a valid amount received / paid.");
+  if(d.tx&&Number(d.paid)>d.tx.total+0.005)errors.push("Payment amount cannot exceed this transaction total in this basic workflow.");
+  if(d.buyer.email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.buyer.email))errors.push("Check the buyer email format.");
+  if(d.seller.email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.seller.email))errors.push("Check the seller email format.");
+  if(d.tx&&d.tx.lines.some(l=>!l.sku||!l.name||!Number.isFinite(l.qty)||!Number.isFinite(l.price)))errors.push("One or more transaction lines are incomplete.");
+  return errors;
+}
+function previewInvoice(){
+  const d=invoiceData(),errors=validateInvoice(d);
+  if(!d.tx){toast("Select a saved transaction first.");return}
+  currentInvoice={...d,errors,id:uid("DRAFT"),status:"Draft",createdAt:new Date().toISOString()};
+  document.getElementById("invoicePreviewArea").style.display="block";
+  document.getElementById("validationBadge").className="pill "+(errors.length?"amber":"green");
+  document.getElementById("validationBadge").textContent=errors.length?errors.length+" item(s) to check":"Local checks passed";
+  document.getElementById("validationResults").innerHTML=errors.length?`<ul style="font-size:12px;line-height:2;color:var(--red)">${errors.map(e=>`<li>${esc(e)}</li>`).join("")}</ul>`:`<div class="notice success">Required fields in the local checklist are filled. Official MyInvois validation is still required.</div>`;
+  renderInvoicePaper(currentInvoice);document.getElementById("invoicePreviewArea").scrollIntoView({behavior:"smooth",block:"start"});
+}
+function renderInvoicePaper(d){
+  const t=d.tx;
+  document.getElementById("invoicePaper").innerHTML=`
+    <div class="invoice-top"><div><h2>${esc(d.seller.name||"Seller business name")}</h2><div class="invoice-meta">${esc(d.seller.address||"Seller address not provided")}<br>TIN: ${esc(d.seller.tin||"Not provided")}<br>Registration: ${esc(d.seller.reg||"Not provided")}<br>MSIC: ${esc(d.seller.msic||"Not provided")}</div></div>
+    <div style="text-align:right"><h2>${esc(d.docType)} <span style="font-size:12px;color:#718096">DRAFT</span></h2><div class="invoice-meta">Draft ID: ${esc(d.id)}<br>Transaction: ${esc(t.ref)}<br>Transaction date: ${esc(t.date)}<br>Currency: ${esc(d.currency)}</div><div class="qr-placeholder" style="margin:12px 0 0 auto">Official QR<br>available after<br>MyInvois validation</div></div></div>
+    <h4>BUYER / RECIPIENT</h4><div class="invoice-meta">${esc(d.buyer.name||"Not provided")}<br>${esc(d.buyer.address||"Address not provided")}<br>TIN: ${esc(d.buyer.tin||"Not provided")}<br>Registration / ID: ${esc(d.buyer.reg||"Not provided")}</div>
+    <h4>ITEM DETAILS</h4><div class="table-wrap"><table><thead><tr><th>SKU</th><th>Description</th><th>Qty</th><th>Unit price</th><th>Discount</th><th>Total</th></tr></thead><tbody>${t.lines.map(l=>`<tr><td>${esc(l.sku)}</td><td>${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.discount)}</td><td>${money(l.qty*l.price-l.discount)}</td></tr>`).join("")}</tbody></table></div>
+    <div class="invoice-total">Subtotal: ${money(t.subtotal)}<br>Discount: ${money(t.discount)}<br><span style="font-size:19px">Total: ${money(t.total)}</span><br><span style="font-size:11px;font-weight:500;color:#718096">Payment: ${esc(d.payment||"Not specified")} · Amount paid: ${money(Number(d.paid||0))}</span><br><span style="font-size:11px;font-weight:500;color:#718096">Balance: ${money(Math.max(0,t.total-Number(d.paid||0)))}</span></div>
+    <div style="margin-top:28px;padding-top:15px;border-top:1px solid #e5e9f2;font-size:10px;color:#718096;line-height:1.7">DRAFT — NOT AN OFFICIAL VALIDATED MALAYSIAN E-INVOICE. No LHDN submission ID, validation timestamp or official QR has been issued. Verify applicable tax and classification details before issuing.</div>`;
+}
+function confirmInvoice(){
+  if(!currentInvoice){toast("Preview the invoice first.");return}
+  const errors=validateInvoice(invoiceData());
+  if(errors.length){toast("Resolve the missing fields before confirming.");return}
+  if(!confirm("Confirm this local draft? This does NOT submit it to LHDN."))return;
+  currentInvoice.status="Confirmed local draft";
+  const existing=db.invoices.findIndex(x=>x.id===currentInvoice.id);
+  const saved=JSON.parse(JSON.stringify(currentInvoice));
+  if(existing>=0)db.invoices[existing]=saved;else db.invoices.push(saved);
+  persist();renderInvoiceHistory();toast("Local draft confirmed. No LHDN submission occurred.");
+  document.getElementById("validationBadge").textContent="Confirmed local draft";
+}
+function renderInvoiceHistory(){
+  const body=document.getElementById("invoiceHistoryBody");if(!body)return;
+  body.innerHTML=db.invoices.length?db.invoices.slice().reverse().map(i=>`<tr><td>${esc(i.id)}</td><td>${esc(i.tx?.ref||"—")}</td><td>${esc(i.buyer?.name||"—")}</td><td>${money(i.tx?.total||0)}</td><td><span class="pill amber">${esc(i.status)}</span></td></tr>`).join(""):`<tr><td colspan="5"><div class="empty">No invoice drafts prepared yet.</div></td></tr>`;
+}
+function downloadBlob(filename,content,type){
+  const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement("a");
+  a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);
+}
+function downloadInvoiceJSON(){
+  if(!currentInvoice){toast("Preview an invoice first.");return}
+  const {errors,...data}=currentInvoice;
+  downloadBlob("e-invoice-draft-"+currentInvoice.id+".json",JSON.stringify(data,null,2),"application/json");
+}
+function downloadInvoiceHTML(){
+  if(!currentInvoice){toast("Preview an invoice first.");return}
+  const html=`<!doctype html><html><head><meta charset="utf-8"><title>Invoice Draft</title><style>body{font-family:Arial,sans-serif;padding:35px;color:#222}table{width:100%;border-collapse:collapse;margin-top:20px}th,td{text-align:left;border-bottom:1px solid #ddd;padding:10px;font-size:12px}.right{text-align:right}.note{margin-top:30px;color:#777;font-size:11px}</style></head><body>${document.getElementById("invoicePaper").innerHTML}</body></html>`;
+  downloadBlob("invoice-draft-"+currentInvoice.id+".html",html,"text/html");
+}
+function emailInvoice(){
+  if(!currentInvoice){toast("Preview an invoice first.");return}
+  const d=currentInvoice,recipient=d.buyer.email||"";
+  if(!recipient){toast("Add the recipient email before preparing an email.");return}
+  const subject=encodeURIComponent("Invoice draft "+d.tx.ref+" — "+d.seller.name);
+  const body=encodeURIComponent("Dear "+d.buyer.name+",\n\nPlease find the invoice draft details for transaction "+d.tx.ref+".\nAmount: "+money(d.tx.total)+"\n\nPlease note this is a draft and has not been validated by LHDN MyInvois.\n\nRegards,\n"+d.seller.name);
+  document.getElementById("emailStatus").textContent="Opening your default email application. No message is sent automatically.";
+  window.location.href="mailto:"+encodeURIComponent(recipient)+"?subject="+subject+"&body="+body;
+}
+
+/* Initial demo content: deliberately no real customer information. */
+document.getElementById("rDate").value=today();
+renderLines();renderAll();
+</script>
+</body>
+</html>
