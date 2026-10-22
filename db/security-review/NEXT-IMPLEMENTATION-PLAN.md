@@ -10,7 +10,10 @@ The user's approved planning decisions are:
 
 - Supabase Auth is the authentication provider.
 - Product creation/editing is Owner/Admin only.
-- Staff may create/edit ordinary order drafts; only Owner/Admin may post.
+- Staff may create ordinary order drafts and view/edit only drafts they created
+  within their company. Owner/Admin may view/manage all drafts in their company.
+  Only Owner/Admin may post; Staff cannot directly modify posted orders.
+- Draft reassignment, transfer and takeover are out of scope.
 - Exports and membership management are Owner/Admin only.
 - Viewer sees products, stock quantities and basic order status only; contact
   details, costs and audit logs are hidden.
@@ -76,10 +79,12 @@ target role. There is no implicit “Owner can do everything”.
 | Stock quantities | P (operational read proposed) | P (operational read proposed) | P | A |
 | Detailed stock movements/history | P | P | P | D |
 | Contact details/list/edit | P | P | P (minimal draft selector undecided) | D |
-| Create/edit ordinary drafts | P (allow proposed) | P (allow proposed) | A(scope) | D |
+| Create ordinary drafts | P | P | A(scope) — new own drafts | D |
+| Edit existing ordinary drafts | A(scope) — all company drafts | A(scope) — all company drafts | A(scope) — own drafts only | D |
 | Delete/cancel an entire draft | P | P | P | D |
-| Read editable draft body/lines | P | P | A(scope) — approved editing fields | D |
-| Basic order status, including draft/posted state | P | P | A(scope) — draft workflow | A |
+| Read editable draft body/lines | A(scope) — all company drafts | A(scope) — all company drafts | A(scope) — own drafts only, approved fields | D |
+| Basic order status, including draft/posted state | A for company drafts; posted P | A for company drafts; posted P | A for own drafts only; posted P | A |
+| Reassign / transfer / take over draft creator | D — out of scope | D — out of scope | D — out of scope | D |
 | Posted-order body/lines beyond basic status | P | P | P | D |
 | Order financial fields: prices/discounts/totals/tax/cost/margin | P | P | P — no implied financial access | D |
 | Post ordinary orders / receive stock by posting a purchase | A | A | D | D |
@@ -97,6 +102,22 @@ or export restrictions. A future exception requires explicit approval and
 separate documentation/tests. Staff cannot modify products by nesting them in
 a draft payload. Posted/reversed orders are immutable to draft editors.
 
+**Confirmed Staff draft scope — own drafts only:** authorize both active
+company membership and immutable creator identity for every draft list, detail,
+search/count, header edit and line read/edit. Staff cannot view another creator's
+draft, even its basic status, by guessing an ID or belonging to the same company.
+Owner/Admin may view and edit all existing ordinary drafts in their company
+regardless of creator, but cannot bypass company or field restrictions. Their
+management does not change the original creator. Viewer can see only the
+permitted basic status projection and cannot create/edit drafts.
+
+Derive the creator from the verified identity at creation, never request
+user_id/created_by/owner fields. Persist immutable, company-aware creator
+metadata, including for lines through their parent order. Use the stable identity
+key, not current role, email or display name. Missing/unverified creator metadata
+must not make a legacy draft available to Staff. No automatic ownership backfill,
+reassignment, transfer or takeover, including by Owner/Admin or nested edits.
+
 “Receiving” means posting a purchase. A Staff receipt draft must not move stock
 until an authorized Owner/Admin posts it. Staff may edit approved draft lines,
 but deletion/cancellation of the entire order is not inferred from editing.
@@ -110,9 +131,9 @@ free-text notes/contact-derived references, order lines, unit prices, totals,
 cost snapshots, valuation, movements or audit data. Additional safe fields
 such as order date and selling price need field-level confirmation.
 
-**Still undecided:** Owner/Admin/Staff operational read scopes; Staff own-versus-
-all-company draft scope, editable prices/discounts and contact selectors;
-Owner/Admin creating drafts; financial/cost/contact/movement/audit visibility;
+**Still undecided:** operational read scopes outside the confirmed draft scope;
+editable prices/discounts and contact selectors; Owner/Admin creating new
+drafts; financial/cost/contact/movement/audit visibility;
 product archive/delete and whole-draft deletion; exact export datasets; role-assignment ceilings and
 ownership transfer. Membership management is approved for Owner/Admin, but that
 does not authorize self-promotion or arbitrary Owner grants. Proposed safe
@@ -324,6 +345,19 @@ receive only necessary DML/column privileges. Products INSERT/UPDATE policies
 require same-company Owner/Admin product-write permission with both USING and
 WITH CHECK protection. Draft policies require an authorized draft writer and
 both old/new state remaining ordinary draft, with immutable company identity.
+For Staff, SELECT/UPDATE policies and every database draft entry point require
+the stored creator to equal the current verified identity. UPDATE USING
+checks the old row; WITH CHECK validates the new row, while guards/column ACLs
+prevent changing company or creator. Creation assigns the verified actor in
+the trusted database function and validates that identity, not a browser claim.
+Owner/Admin branches allow existing-draft reads/edits across creators only
+inside the authorized company. Apply the same predicates to line operations
+via the company-aware parent; authorizing a header alone is insufficient.
+Use a separate Viewer basic-status projection, never full draft access.
+Serialize draft edits with posting on the parent order and recheck its state
+under lock: a draft fetched earlier cannot be edited once posting wins.
+Check ownership before any idempotent response or existence-sensitive result.
+No owner/creator mutation function or generic ownership-changing update exists.
 Staff cannot select the posting policy by changing an input action string.
 Existing guards plus explicit column whitelists prevent post/edit escalation.
 
@@ -428,9 +462,12 @@ RLS enforce those checks independently of route visibility.
 | Quantity read | Viewer allowed; other role read scopes pending; no valuation or movement join leakage |
 | Movement history read | Pending per role; Viewer denied |
 | Contact read/search/write | Pending per role; Viewer denied, no implicit Staff draft lookup privilege |
-| Ordinary draft create/edit | Staff allowed; Owner/Admin draft editing pending; whitelisted fields, nested IDs company-scoped, atomic audit |
+| Ordinary draft create | Staff creates a new own draft with verified immutable creator; Owner/Admin creation pending; field whitelist and atomic audit |
+| Ordinary draft edit | Staff only their own; Owner/Admin all company drafts; current ordinary-draft state, parent/line authorization, immutable company/creator, atomic audit |
 | Whole-draft delete/cancel | Pending for every role except Viewer, which is denied; no implicit permission from line editing |
-| Draft read / posted order read | Staff editable draft projection; Viewer ID/status only; posted details/financial fields separately authorized |
+| Draft list/detail/search/count/lines | Staff only their own drafts; Owner/Admin all company drafts; no foreign-company or other-creator leakage; permitted field projections only |
+| Basic status / posted order read | Viewer ID/status only; Staff draft status only for own drafts; posted details/financial fields separately authorized |
+| Draft reassignment / transfer / takeover | No route or database entry point; reject creator-changing payloads for every role |
 | Post sale/purchase/receive | Owner/Admin only; real kind and ledger checked; Staff/Viewer denied |
 | Adjustment / reversal | Owner/Admin only; no alternative draft route to bypass |
 | Export request/generate/download | Owner/Admin + dataset/field permission + current membership; Staff/Viewer denied regardless of file/job ID |
@@ -467,6 +504,7 @@ permission/security phase, not edits to their historical checksums.
 | --- | --- |
 | identities / issuers refinement | Unique exact issuer/subject, enabled status; no passwords/JWTs/credentials; deterministic opaque-ID comparisons |
 | company_memberships refinement | Company/identity composite key and FKs, Owner/Admin/Staff/Viewer only; Operator deprecated/denied, no automatic promotion; status/revoked_at/version checks |
+| Immutable order-creator metadata | Future reviewed additive design: one creator per company/order, company-aware order FK and verified stable identity FK; no caller assignment, reassignment or automatic legacy backfill; child access inherits parent scope |
 | role_permissions | Reviewed role/resource/action and field-tier catalogue; unapproved access absent/denied; caller cannot edit it |
 | company_security_state | One row per company FK, pending/active/suspended state, first-owner/recovery markers; avoids changing core 0001 |
 | onboarding_requests | Trusted initiator, unique idempotency key and payload fingerprint, company FK, checked workflow state |
@@ -492,7 +530,8 @@ Do not retain raw access/refresh tokens or plaintext invitation tokens.
 
 ## 5. Dependencies, hosted assumptions and release risks
 
-- Pending read/field scopes, Staff draft scope, role ceilings, ownership transfer,
+- Pending non-draft read/field scopes, Owner/Admin new-draft creation, whole-draft
+  deletion/cancellation, role ceilings, company ownership transfer,
   export datasets and product archive/delete policy. Confirmed permissions above
   are not pending again; implementation/deployment approval is still separate.
 - Non-owner reader/writer ownership and RLS policy topology must be implemented

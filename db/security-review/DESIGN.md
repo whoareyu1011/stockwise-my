@@ -157,7 +157,9 @@ the fresh cluster's deterministic locale.
 | Operation | Owner | Admin | Staff | Viewer |
 | --- | --- | --- | --- | --- |
 | Create/edit products | Yes | Yes | No | No |
-| Create/edit ordinary drafts | Pending | Pending | Yes, scoped | No |
+| Create ordinary drafts | Pending | Pending | Yes, new own drafts | No |
+| View/edit existing ordinary drafts | All company drafts, scoped | All company drafts, scoped | Own drafts only, scoped | Basic status only; no editing |
+| Reassign / transfer / take over drafts | No | No | No | No |
 | Post ordinary orders | Yes | Yes | No | No |
 | Adjust stock / reverse orders | Yes | Yes | No | No |
 | Export permitted data | Yes, scoped | Yes, scoped | No | No |
@@ -167,6 +169,12 @@ the fresh cluster's deterministic locale.
 
 The detailed resource/field matrix, pending financial/contact/movement/audit
 read permissions and role-assignment ceilings are in NEXT-IMPLEMENTATION-PLAN.
+Staff draft ownership is confirmed: derive immutable creator from verified
+identity; authorize company and creator for list/detail/line reads and edits.
+Owner/Admin may manage existing drafts across creators only in their company;
+they cannot change creator. Staff cannot post or directly modify posted orders.
+Enforce these rules in backend checks and database authorization/RLS, not UI
+visibility. The original prototype has not implemented/tested this policy.
 “Owner” is a company role, never a database owner. Operator is deprecated,
 excluded and not automatically mapped to Staff. The old all-eight-table Viewer
 projection and Operator posting path remain only in unmodified historical test

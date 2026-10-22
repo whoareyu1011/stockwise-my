@@ -14,6 +14,9 @@ future explicitly approved implementation, not assertions about current code.
 4. Seed synthetic A/B companies, pending and suspended companies, Owner/Admin/
    Staff/Viewer, removed/disabled identities, multi-company users, independent sessions
    and deliberately conflicting contacts/products/orders.
+   Include two distinct Staff identities in company A, drafts created by each,
+   an Owner/Admin-created draft, company B drafts, posted orders and a draft
+   with missing/unverified creator metadata. Use synthetic fixtures only.
 5. All future SQL, seeds and tests stay local unless hosted testing is separately
    authorized. Do not install services/resources or incur unapproved costs.
 6. Re-run the original 58/40 suites and revised prototype tests where applicable.
@@ -55,7 +58,18 @@ partially UNTESTED until separately approved provider tests demonstrate it.
 | Viewer edits products, drafts, stock or memberships | Deny at API and database boundary |
 | Viewer posts purchases/sales, adjusts stock or reverses | Deny with no ledger/order/audit side effects |
 | Viewer reads contact/cost/financial/audit/movement data through alternate routes, joins, views or SELECT * | Deny; only basic products, quantities and order ID/status visible |
-| Staff creates/edits an authorized ordinary draft | Succeed within approved field/draft scope; no stock movement or posting |
+| Staff creates a new ordinary draft | Succeed within approved fields; immutable creator is verified actor, no stock movement/posting |
+| Staff views/edits their own company draft, including its lines | Allow approved fields while still draft; atomic edit/audit, no stock effects |
+| Staff views/edits another Staff member's draft in the same company | Deny detail/header/line access; list/search/count/status reveal no other-creator drafts |
+| Staff views/edits an Owner/Admin-created draft | Deny; same company alone does not confer ownership |
+| Staff accesses/edits a foreign-company draft | Deny even if its creator identity matches, or the user also belongs to that company but selected a different company |
+| Staff passes their own header ID with another creator's or company's line ID | Deny the entire command; no partial header/line/audit effects |
+| Owner/Admin views/manages drafts created by any member of their company | Allow permitted existing-draft reads/edits across creators; preserve original creator and field restrictions |
+| Owner/Admin views/edits another company's draft | Deny; elevated role never bypasses company isolation |
+| Viewer creates/edits any draft or reads full draft body/lines | Deny; allow only permitted company basic status |
+| Any role requests draft reassignment/transfer/takeover | Deny; no route/function, including creator changes through nested/bulk updates |
+| Browser supplies another creator or changes creator/company after creation | Reject caller-controlled creator changes; no spoofed assignment or ownership rewrite |
+| Draft has missing/unverified creator metadata | Staff denied; no implicit claim, backfill or takeover |
 | Staff tries product create/edit through direct or nested payload | Deny, including bulk/import/upsert aliases |
 | Staff edits posted/reversed order or sets status/key/snapshots | Deny with all header/line/ledger values unchanged |
 | Staff posts ordinary orders or calls purchase-receipt shortcuts | Deny, including calling SQL wrappers without API middleware |
@@ -80,10 +94,31 @@ responses/counts do not vary because a hidden predicate was evaluated.
 Do not equate preventing hidden-data disclosure with preventing manual copying
 of permitted fields.
 
-Staff positives must prove create/edit of drafts in its approved scope, while
+Staff positives must prove create/edit of their own drafts only, while
 malicious company/product/contact/line IDs, financial fields without permission,
 adjustment/reversal kinds and posted-state changes are rejected at the database
-boundary. Test the chosen own-versus-company draft rule once decided.
+boundary. Own-drafts-only is confirmed, not a pending scope decision.
+
+Run the draft authorization cases at two independent boundaries in a future
+approved test environment: authenticated backend requests and direct calls to
+permitted database functions as the restricted runtime caller without API
+middleware. Do not use a superuser as evidence. Verify row-level policies and
+line-parent checks prevent other-creator access; no frontend hiding counts as
+authorization. Confirm denial causes no business-state mutation or success
+audit and does not disclose another draft's existence/content.
+
+Test forged user/company/creator IDs, stale or revoked membership, role changes
+and reused pooled connections. Being the original creator is insufficient
+without current same-company permission. Owner/Admin changing roles must not
+change creator metadata. Staff cannot regain authority over others' drafts by
+changing request context, setting an action string or invoking a private core
+function.
+
+Race own-draft editing against Owner/Admin posting: lock and recheck the parent
+state, accept only a valid serialized outcome, and prevent any edit after posting
+commits. Staff posting and direct posted-header/line modification always fail,
+including retries and low-level database attempts. Confirm balances, movements
+and success audits are unchanged by rejected attempts.
 
 ## C. Membership, onboarding and invitations
 

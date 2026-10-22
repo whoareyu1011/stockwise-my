@@ -7,7 +7,11 @@ The user approved these design decisions for planning:
 
 - Authentication provider: Supabase Auth.
 - Product creation and editing: Owner/Admin only.
-- Ordinary order workflow: Staff may create and edit drafts; only Owner/Admin may post orders.
+- Staff draft scope: own drafts only. Staff may create drafts and view/edit only drafts they created, subject to company isolation; not other Staff members' drafts.
+- Owner/Admin may view and manage all drafts within their own company.
+- Viewer cannot create/edit drafts and may view only permitted basic order status.
+- Staff cannot post orders or directly modify posted orders. Only Owner/Admin may post.
+- Do not implement draft reassignment, transfer or takeover for now.
 - Data exports: Owner/Admin only.
 - Viewer: may see products, stock quantities and basic order status only. Hide contact details, costs and audit logs.
 - Membership management: Owner/Admin.
