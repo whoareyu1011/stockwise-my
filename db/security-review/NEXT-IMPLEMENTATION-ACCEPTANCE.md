@@ -12,7 +12,7 @@ future explicitly approved implementation, not assertions about current code.
 3. Use actual restricted runtime/verifier/worker LOGIN sessions. A superuser
    session followed by SET ROLE is not equivalent privilege evidence.
 4. Seed synthetic A/B companies, pending and suspended companies, Owner/Admin/
-   Viewer, removed/disabled identities, multi-company users, independent sessions
+   Staff/Viewer, removed/disabled identities, multi-company users, independent sessions
    and deliberately conflicting contacts/products/orders.
 5. All future SQL, seeds and tests stay local unless hosted testing is separately
    authorized. Do not install services/resources or incur unapproved costs.
@@ -54,14 +54,36 @@ partially UNTESTED until separately approved provider tests demonstrate it.
 | Browser/JWT metadata claims company/Owner/Admin | No authority; no membership/role creation |
 | Viewer edits products, drafts, stock or memberships | Deny at API and database boundary |
 | Viewer posts purchases/sales, adjusts stock or reverses | Deny with no ledger/order/audit side effects |
-| Viewer reads contacts/tax/audit data through joins or SELECT * | No access beyond approved projection |
-| Owner/Admin adjustment and reversal | Succeed only for active authorized company and valid ledger operation |
+| Viewer reads contact/cost/financial/audit/movement data through alternate routes, joins, views or SELECT * | Deny; only basic products, quantities and order ID/status visible |
+| Staff creates/edits an authorized ordinary draft | Succeed within approved field/draft scope; no stock movement or posting |
+| Staff tries product create/edit through direct or nested payload | Deny, including bulk/import/upsert aliases |
+| Staff edits posted/reversed order or sets status/key/snapshots | Deny with all header/line/ledger values unchanged |
+| Staff posts ordinary orders or calls purchase-receipt shortcuts | Deny, including calling SQL wrappers without API middleware |
+| Staff adjusts stock, reverses, manages members or exports | Deny; no exception assumed |
+| Owner/Admin product create/edit, posting, adjustment and reversal | Succeed within approved field scope for active authorized company; all effects/audits atomic |
 | Unapproved action/unknown role/legacy Operator | Deny; no implicit migration to Admin |
-| Exports and member-management actions | Deny unless the matrix cell was separately approved |
+| Owner/Admin export request/generation/download | Require dataset/read/field permission and fresh same-company membership; no raw public/signed-link bypass |
+| Staff/Viewer export by guessed job ID, CSV route or alternate content type | Deny; no bytes, job payload or hidden-field metadata |
+| Owner/Admin membership list/invite/remove/approved role change | Succeed for same-company permitted targets; approved management is not Owner-grant authority |
+| Staff/Viewer membership records or management | Deny, except minimum own role/company context and intended-recipient invitation acceptance |
+| Owner/Admin cross-company export/member/product actions | Deny despite their elevated role in a different company |
 | Permissions changed/removed after token or proof issuance | Next operation uses current permissions, not cached claims |
 
 For pending matrix cells, add positive tests only after approval; denial is the
 initial required result. Test field/column exposure, not merely company filters.
+
+Viewer-specific negative coverage must include hidden-field filters/sorts,
+counts/aggregates, valuation/margins, order lines and nested JSON, free-text
+notes/reference labels, GraphQL/RPC aliases, export metadata and error bodies.
+Use hidden-value variants with identical authorized visible data and assert
+responses/counts do not vary because a hidden predicate was evaluated.
+Do not equate preventing hidden-data disclosure with preventing manual copying
+of permitted fields.
+
+Staff positives must prove create/edit of drafts in its approved scope, while
+malicious company/product/contact/line IDs, financial fields without permission,
+adjustment/reversal kinds and posted-state changes are rejected at the database
+boundary. Test the chosen own-versus-company draft rule once decided.
 
 ## C. Membership, onboarding and invitations
 
@@ -101,9 +123,21 @@ email behavior remains a hosted integration gate.
   RLS still prevents cross-company/unapproved-resource access.
 - Every definer has intended NOLOGIN ownership, fixed search_path, explicit
   company/action checks, qualified references and minimal function ACL.
+- Review the seven original and eight prototype definers plus every proposed
+  read/write/member/adjustment/export wrapper. Private implementations remain
+  inaccessible to runtime even when the API wrapper itself is callable.
 - Search-path/temp-table spoofing cannot redirect helpers.
-- Test that table-owner functions bypass owner RLS, then prove wrappers—not
-  assumed RLS—enforce scope. New read functions return only allowed columns.
+- Invoke new non-owner read/write definers directly, omitting API checks: RLS
+  still blocks foreign companies, Staff posting, Viewer writes and unauthorized
+  resources. Assert both USING and WITH CHECK and immutable company identities.
+- Check the separate basic/sensitive reader owners have no BYPASSRLS, table
+  ownership or runtime role membership. Basic readers lack hidden-column
+  privileges; sensitive-reader policies deny Viewer. Default owner-bypass views
+  and SELECT * cannot circumvent the projection boundary.
+- Test that unchanged core table-owner functions bypass owner RLS, then prove
+  database wrappers—not assumed RLS or API checks—enforce their scope.
+- Each new function owner needs hardened global defaults and a narrowly reviewed
+  deployment/ownership path; preserve the earlier owner/migrator invariants.
 - Original deferred integrity functions still succeed at COMMIT under the
   restricted caller, and reject corrupted/partial final states.
 - Global default function hardening remains effective; no schema-specific or
@@ -130,6 +164,29 @@ email behavior remains a hosted integration gate.
   last-owner changes and commands; prove the documented lock ordering.
 - Cleanup must not reactivate old sessions, delete needed tombstones, retain
   raw credentials or permit active-context reuse. Test bounded storage/load.
+
+## E1. Audit integrity and delivery outcomes
+
+- Assert company-scoped verified actor/session/request/action/target/time for
+  product changes, draft edits, posting, adjustments, reversals, exports,
+  invitation lifecycle, membership changes and all role changes.
+- Mutations and success audit commit atomically. Inject audit failures and
+  deferred COMMIT errors; no partial product/draft/order/stock/member/invite
+  state or duplicate success event remains. Retrying records one logical effect.
+- Staff cannot forge a posting/admin event through a generic audit call.
+  Ordinary runtime cannot UPDATE/DELETE/TRUNCATE audit rows, spoof actor/company,
+  remove prior role evidence or associate an event with another company's object.
+- Viewer cannot read audit rows, event counts, joins, downloads or event metadata.
+  Staff audit reads remain denied pending approval. Any approved audit reader
+  is subject to company policies, including Owner/Admin cross-company denial.
+- Exports have a durable authorization event before data release plus correlated
+  completion/failure/abort outcomes. Denied requests release no bytes. Confirm
+  revocation before later download denies even if a private artifact exists.
+- Failed streaming is not a successfully delivered file; already released bytes
+  cannot be rolled back. Never claim exactly-once network delivery.
+- Logs/audit payloads contain no JWT, proof, credential, raw invitation token,
+  secret-bearing URL or uncontrolled request body. Denial logging must not
+  accidentally commit a rolled-back business operation.
 
 ## F. Separately approved hosted tests and release gates
 

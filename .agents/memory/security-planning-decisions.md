@@ -6,13 +6,21 @@ description: User-confirmed StockWise MY security requirements and the limits of
 The user approved these design decisions for planning:
 
 - Authentication provider: Supabase Auth.
-- Viewer: read-only access to products, inventory and orders.
+- Product creation and editing: Owner/Admin only.
+- Ordinary order workflow: Staff may create and edit drafts; only Owner/Admin may post orders.
+- Data exports: Owner/Admin only.
+- Viewer: may see products, stock quantities and basic order status only. Hide contact details, costs and audit logs.
+- Membership management: Owner/Admin.
 - Stock adjustments and order reversals: Owner/Admin only.
 - Company creation and first-owner onboarding: trusted backend workflow with an invitation process.
 - Administrative database credentials must be separated from business-runtime credentials.
 - Every business operation must enforce company-level authorization.
 
 Approval covers planning only, not implementation or deployment.
+
+Staff cannot post, adjust stock, reverse orders, manage members or export
+company data unless a separately approved exception is documented. Operator is
+deprecated and excluded from authorization.
 
 **Why:** The user explicitly confirmed these decisions in the attached planning instructions.
 

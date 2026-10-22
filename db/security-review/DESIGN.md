@@ -4,12 +4,18 @@
 has been implemented in the existing application.** This directory contains an
 isolated prototype and its test results, not an approved next migration.
 
+**Current planning authority:** `NEXT-IMPLEMENTATION-PLAN.md` and
+`NEXT-IMPLEMENTATION-ACCEPTANCE.md` contain the confirmed Owner/Admin/Staff/Viewer
+rules. The SQL and tests described below are historical prototypes, not current
+permission approval. Operator is deprecated and excluded from authorization.
+Broad Viewer reads in the prototype are superseded, not authorized for rollout.
+
 ## 1. Proposed authentication choice
 
-The reference option is **Supabase Auth with asymmetric ES256 access tokens**,
-so the inventory database and user identity service can use the same provider.
-Provider/signing-mode selection still requires your approval. The actual
-project's signing settings were not inspected or changed.
+**Supabase Auth is confirmed for planning.** The reference prototype uses
+asymmetric ES256 access tokens; exact signing-mode settings still need
+confirmation. The actual project's signing settings were not inspected or
+changed.
 
 The provider handles sign-in, passwords, password recovery and MFA. StockWise
 stores only an immutable external `(issuer, subject)` identity mapping, account
@@ -86,7 +92,7 @@ compromise can impersonate users. The reference code does not claim otherwise.
 | Administrative operator | Approved offline deployment/provisioning | Never ordinary web requests |
 | stockwise_owner | NOLOGIN object/function owner | No runtime membership or login |
 | stockwise_migrator | NOLOGIN deployment role | No runtime membership or login |
-| stockwise_runtime | NOLOGIN capability role: RLS SELECT plus five public-to-runtime helper/entry-point functions | No DML, auth-table access, proof issuance, owner/migrator membership, CREATE or BYPASSRLS |
+| stockwise_runtime | Historical prototype: RLS SELECT plus five helper/entry-point functions; current plan replaces this with EXECUTE-only access | No DML, auth-table access, proof issuance, owner/migrator membership, CREATE or BYPASSRLS |
 | stockwise_verifier | NOLOGIN capability role: issue_context only | No business SELECT, commands, membership editing or deployment rights |
 
 Here “public-to-runtime” means explicitly granted to that restricted role,
@@ -146,21 +152,25 @@ Review exact, deterministic comparison/collation requirements for opaque
 issuer/subject strings on the eventual hosted target. The local tests used
 the fresh cluster's deterministic locale.
 
-## 5. Operation permissions
+## 5. Current confirmed operation permissions
 
-| Operation | Viewer | Operator | Admin / Owner |
-| --- | --- | --- | --- |
-| Read authorized company inventory | Yes | Yes | Yes |
-| Post sale/purchase | No | Yes | Yes |
-| Post opening/adjustment orders | No | No | Yes |
-| Reverse orders | No | No | Yes |
-| Direct business DML or membership changes | No | No | No |
+| Operation | Owner | Admin | Staff | Viewer |
+| --- | --- | --- | --- | --- |
+| Create/edit products | Yes | Yes | No | No |
+| Create/edit ordinary drafts | Pending | Pending | Yes, scoped | No |
+| Post ordinary orders | Yes | Yes | No | No |
+| Adjust stock / reverse orders | Yes | Yes | No | No |
+| Export permitted data | Yes, scoped | Yes, scoped | No | No |
+| Manage same-company members | Yes, scoped | Yes, scoped | No | No |
+| Basic products / quantities / order status | Other read scopes pending | Other read scopes pending | Draft workflow scope; other reads pending | Yes, no contacts/costs/audit |
+| Direct business DML / audit modification | No | No | No | No |
 
-These business-role choices require approval. “Owner” here is a company member
-label, never a PostgreSQL owner role.
-The proposed read permission covers all eight inventory tables, including
-contacts, orders and core audit details. If viewers must not see those records,
-approve a narrower table/column permission model before implementing endpoints.
+The detailed resource/field matrix, pending financial/contact/movement/audit
+read permissions and role-assignment ceilings are in NEXT-IMPLEMENTATION-PLAN.
+“Owner” is a company role, never a database owner. Operator is deprecated,
+excluded and not automatically mapped to Staff. The old all-eight-table Viewer
+projection and Operator posting path remain only in unmodified historical test
+sources; they are not approved permissions.
 
 Runtime users enumerate companies through `stockwise_api.my_companies()`,
 which derives results from the verified identity and current active memberships.
@@ -183,6 +193,11 @@ Owner functions bypass owner RLS even though the role has NOBYPASSRLS. Do not
 assume enabling RLS makes their bodies safe.
 
 Two new proposed wrappers provide the authorization boundary:
+
+The following describes the historical tested prototype, not the current
+four-role contract. Future posting must be Owner/Admin only; adjustments and
+membership management also need private authorized entry points, and new
+read/write definers need the non-owner policy design in the implementation plan.
 
 - `stockwise_api.post_order`: verifies proof, locks active account/issuer/
   membership, checks the company role, locks/scopes the order, checks operator
@@ -209,6 +224,12 @@ function default hardening remains mandatory. Do not FORCE RLS on the existing
 owner-dependent command chain without redesigning and retesting it.
 
 ## 7. Proposed RLS and direct-write defense
+
+**Historical prototype only:** the broad eight-table SELECT policies below
+must not be deployed as the current Viewer design. The current plan requires
+EXECUTE-only runtime, non-owner policy-enforced readers/writers, disclosure-tier
+column grants and anti-inference tests. The old SQL/test report is preserved
+as evidence, not silently changed to claim those new controls were tested.
 
 Eight SELECT policies apply only to stockwise_runtime:
 
@@ -257,14 +278,15 @@ hook. The frontend remains its existing unauthenticated browser-data prototype.
 
 ## 9. Manual decisions and release gates
 
-1. Approve provider, signing mode, exact issuer/audience, token lifetime,
+1. Supabase Auth is confirmed; approve signing mode, exact issuer/audience, token lifetime,
    session revocation expectations and client token storage/CSRF strategy.
 2. Approve the two-restricted-connection proof architecture and verifier
    isolation, or request an alternative design using a trusted JWT gateway
    instead of direct PostgreSQL request connections. That alternative has not
    been implemented or tested here.
-3. Approve member roles and operation permissions, first-owner bootstrap,
-   invitations, account disabling, last-owner safeguards and audit retention.
+3. Use the confirmed four-role matrix; resolve its marked field/target-role
+   decisions, first-owner bootstrap, invitations, account disabling, last-owner
+   safeguards and audit retention.
 4. Approve future credential separation and removal of admin credentials from
    internet-facing processes; no configuration/secrets were changed today.
 5. Decide proof retention/cleanup, rate limits, pool sizes, timeout budgets and

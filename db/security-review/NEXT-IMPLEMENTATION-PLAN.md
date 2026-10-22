@@ -9,7 +9,11 @@ application/configuration changes are performed by this plan.
 The user's approved planning decisions are:
 
 - Supabase Auth is the authentication provider.
-- Viewer has read-only access to products, inventory and orders.
+- Product creation/editing is Owner/Admin only.
+- Staff may create/edit ordinary order drafts; only Owner/Admin may post.
+- Exports and membership management are Owner/Admin only.
+- Viewer sees products, stock quantities and basic order status only; contact
+  details, costs and audit logs are hidden.
 - Stock adjustments and order reversals are Owner/Admin only.
 - Company creation and first-owner onboarding use a trusted backend workflow
   and an invitation process.
@@ -35,14 +39,17 @@ Supabase. Their documented initial fixture/script failures remain unchanged.
 
 ### Conflicts with the earlier prototype
 
-1. It included an **Operator** role. The requested matrix now covers Owner,
-   Admin and Viewer. Do not carry Operator permissions forward or silently
-   promote an Operator. Reject unmapped roles until a transition is approved.
+1. It included an **Operator** role. Operator is deprecated and excluded from
+   authorization. The current roles are **Owner, Admin, Staff and Viewer**.
+   Do not map Operator to Staff/Admin automatically; reject it until a separately
+   approved transition exists.
 2. Its Viewer could read all eight tables, including contacts and audit details.
    That exceeds the confirmed Viewer scope. The next proposal must withdraw
    broad base-table access and define narrow read contracts.
-3. Its Owner/Admin sales, purchase, editing and other read permissions were
-   proposed, not approved. They remain explicit decisions, not automatic grants.
+3. Owner/Admin product creation/editing, posting, exports and membership
+   management are now confirmed. Staff draft permissions are confirmed, but
+   Staff must not inherit the old Operator's posting permission.
+   Unspecified read/financial fields and grantable-role ceilings remain pending.
 4. Offline JWT validation alone does not establish provider-session revocation.
    A trusted session-status mechanism and tests are required.
 5. Invitations, first-owner activation and last-owner protection were deferred;
@@ -56,38 +63,65 @@ future implementation uses separate reviewed changes and new test evidence.
 
 ## 2. Permission matrix — no silent approvals
 
-**A** = confirmed allowed; **D** = denied by confirmed read-only/restricted rule;
-**P** = not explicitly approved, deny until decided. Parentheses are suggestions
-for review, not permissions. There is no implicit “Owner can do everything”.
+**A** = confirmed allowed; **D** = denied; **P** = not explicitly approved,
+deny until decided. **A(scope)** permits the workflow but not every field or
+target role. There is no implicit “Owner can do everything”.
 
-| Business operation | Owner | Admin | Viewer |
-| --- | --- | --- | --- |
-| Read products | P (allow proposed) | P (allow proposed) | A |
-| Read inventory/balance and approved movement fields | P (allow proposed) | P (allow proposed) | A |
-| Read orders and approved line fields | P (allow proposed) | P (allow proposed) | A |
-| Create/edit/archive products | P (allow proposed) | P (allow proposed) | D |
-| Receive stock by posting a purchase | P (allow proposed) | P (allow proposed) | D |
-| Create/edit draft orders | P (allow proposed) | P (allow proposed) | D |
-| Post sales/purchase orders | P (allow proposed) | P (allow proposed) | D |
-| Adjust stock, including opening-balance entry | A | A | D |
-| Reverse orders | A | A | D |
-| Export/download bulk data | P | P | P — reading is not export approval |
-| Invite/remove/change company members | P | P | D |
-| Transfer ownership/promote another Owner | P — separate protected workflow | P (deny proposed) | D |
-| Read contacts, tax IDs, company details or audit logs beyond minimal identity | P | P | P — no additional access approved |
-| Create a company/appoint its first Owner directly | Trusted onboarding service only | Trusted onboarding service only | Trusted onboarding service only |
-| Direct database writes or grant database privileges | D | D | D |
+| Resource / operation | Owner | Admin | Staff | Viewer |
+| --- | --- | --- | --- | --- |
+| Product basic read | P (operational read proposed) | P (operational read proposed) | P (draft selector proposed) | A |
+| Product create/edit | A(scope) | A(scope) | D | D |
+| Product archive/hard delete | P | P | D | D |
+| Product costs / valuation / margins | P | P | P | D |
+| Stock quantities | P (operational read proposed) | P (operational read proposed) | P | A |
+| Detailed stock movements/history | P | P | P | D |
+| Contact details/list/edit | P | P | P (minimal draft selector undecided) | D |
+| Create/edit ordinary drafts | P (allow proposed) | P (allow proposed) | A(scope) | D |
+| Delete/cancel an entire draft | P | P | P | D |
+| Read editable draft body/lines | P | P | A(scope) — approved editing fields | D |
+| Basic order status, including draft/posted state | P | P | A(scope) — draft workflow | A |
+| Posted-order body/lines beyond basic status | P | P | P | D |
+| Order financial fields: prices/discounts/totals/tax/cost/margin | P | P | P — no implied financial access | D |
+| Post ordinary orders / receive stock by posting a purchase | A | A | D | D |
+| Adjust stock, including opening-balance entry | A | A | D | D |
+| Reverse orders | A | A | D | D |
+| Export/download company data | A(scope) | A(scope) | D | D |
+| Company membership records and management | A(scope) | A(scope) | D (except own minimal context) | D (except own minimal context) |
+| Transfer ownership / appoint additional Owners | P — protected workflow | P (deny proposed) | D | D |
+| Read audit logs | P | P | P (deny proposed) | D |
+| Modify/delete audit logs or direct database writes/grants | D | D | D | D |
+| Company creation / first-owner appointment | Trusted onboarding workflow only | Trusted onboarding workflow only | Trusted onboarding workflow only | Trusted onboarding workflow only |
 
-“Receiving” means a purchase posting, not an adjustment; approval to adjust does
-not automatically approve purchase/order permissions. Every mutation must check
-the actual operation and order kind, not its route name.
+Staff has no exception to posting, adjustment, reversal, membership management
+or export restrictions. A future exception requires explicit approval and
+separate documentation/tests. Staff cannot modify products by nesting them in
+a draft payload. Posted/reversed orders are immutable to draft editors.
 
-Before implementation, confirm the pending cells, product cost/pricing fields,
-order/contact fields visible to Viewer, whether history is included, and who
-may initiate trusted onboarding. Basic read projection proposed: product
-ID/SKU/name/unit/category/status, inventory quantity/basic movement history,
-and order reference/kind/date/status/approved lines. Exclude raw audit details,
-tax/contact records and unapproved financial fields by default.
+“Receiving” means posting a purchase. A Staff receipt draft must not move stock
+until an authorized Owner/Admin posts it. Staff may edit approved draft lines,
+but deletion/cancellation of the entire order is not inferred from editing.
+Validate actual order kind and final
+state, not route names. Staff cannot create a privileged adjustment/reversal
+through the ordinary-draft path.
+
+**Viewer projection:** basic non-cost product fields, stock quantity by product,
+and opaque order ID/status only by default. No contact identifiers/details,
+free-text notes/contact-derived references, order lines, unit prices, totals,
+cost snapshots, valuation, movements or audit data. Additional safe fields
+such as order date and selling price need field-level confirmation.
+
+**Still undecided:** Owner/Admin/Staff operational read scopes; Staff own-versus-
+all-company draft scope, editable prices/discounts and contact selectors;
+Owner/Admin creating drafts; financial/cost/contact/movement/audit visibility;
+product archive/delete and whole-draft deletion; exact export datasets; role-assignment ceilings and
+ownership transfer. Membership management is approved for Owner/Admin, but that
+does not authorize self-promotion or arbitrary Owner grants. Proposed safe
+ceiling: both may manage Staff/Viewer; Admin-to-Admin and Owner appointment
+require explicit decisions. Exports are intersected with approved read/field
+permissions, not a bypass to hidden data.
+
+Pending read/field decisions can block a usable posting/editing interface;
+resolve them before implementation rather than silently expanding access.
 
 ## 3. Implementation sequence and approval gates
 
@@ -107,7 +141,11 @@ BYPASSRLS, CREATEROLE, database CREATE or privileged inherited memberships.
 Each inherits only its reviewed capability role, without ADMIN/SET delegation.
 
 The business role should be **EXECUTE-only**, with no raw inventory/security
-table access. It calls approved read/mutation entry points. The verifier may
+table access. It calls approved read/mutation entry points. Separate NOLOGIN,
+non-owner, NOBYPASSRLS reader/writer capability roles execute scoped queries
+under mandatory policies; the runtime must not be their member or SET ROLE to
+them. Reader roles are split by disclosure tier to protect columns as well as
+rows. The verifier may
 issue context and perform narrowly scoped session checks, not read business
 data or edit memberships. A separate onboarding worker capability may execute
 approved onboarding/invitation functions, not arbitrary owner SQL.
@@ -229,8 +267,10 @@ an event. Resending revokes the old link. Concurrent accept/revoke/expiry has
 one serialized outcome, not two memberships. A pending expired row must be
 retired explicitly before creating a replacement pending invitation.
 
-**Member changes:** only approved membership-management actions may invite,
-remove or change roles. Never let a caller assign a role it cannot grant,
+**Member changes:** Owner/Admin may manage same-company memberships through
+authorized wrappers. Staff/Viewer cannot list other members or mutate them.
+Check target-role ceilings separately; unresolved elevations deny.
+Never let a caller assign a role it cannot grant,
 approve its own elevation or create arbitrary Owner invitations.
 Removal is soft revocation, not deletion of historic identities/audit.
 Every subsequent operation rereads membership. Commands already authorized
@@ -253,35 +293,108 @@ Keep all seven original definers unchanged:
   deferred validators; they must still work at COMMIT after wrapper return.
 - stockwise.post_order/reverse_order remain private internal commands.
 
-New narrow wrappers authorize the requested company and actual operation/kind
-before core calls, including before returning an idempotent result. Owner/Admin
-adjust/reverse rules are explicit. Ordinary posting/receiving/editing remain
-disabled until their matrix cells are approved. Write verified actor/session/
-request audit in the same transaction; a failed command leaves no partial audit.
+Review all seven original definers above and all eight prototype definers:
+issue_context, verified_context, activate_context, can_read_company, authorize,
+my_companies and the two API command wrappers. The verifier-only issuance helper
+stays private to its credential. Context/policy helpers do not grant membership
+or accept browser role claims. Replace the coarse read helper contract with
+resource/action-aware checks and add session validation in a separately reviewed
+implementation; do not deploy the old prototype unchanged.
 
-Proposed read entry points: list/get products, inventory, orders and order lines,
-plus minimal authorized company enumeration. Use bounded pagination, explicit
-column allowlists and company predicates on every related-table join. Do not
-expose contacts/audit/tax details simply because a view joins those tables.
+Wrappers authorize company, current membership, session, resource, operation and
+actual kind before privileged core calls, including idempotent results.
+Owner/Admin-only posting, stock adjustment, reversal and membership operations
+must have no direct runtime EXECUTE path to their private implementation.
+Staff draft edits cannot set status, posted_at, posting_key, reversal linkage,
+stock movement/balance or protected snapshots. Authorize each nested line ID.
+Movement rows are immutable ledger effects of approved commands; even
+Owner/Admin have no manual movement insert/edit/delete endpoint.
 
-Recommended direct-Node design is EXECUTE-only runtime access; replace the old
-broad SELECT proposal in a future separately reviewed change. Read definers
-owned by the table owner bypass RLS, so their bodies must explicitly authorize,
-scope and project every query. RLS is defense in depth, not an excuse to omit
-those checks. Any non-owner read-function design needs a separately reviewed
-ownership/grant topology; do not silently alter the owner/migrator invariants.
+**RLS-enforced reads:** use separate NOLOGIN, non-owner/NOBYPASSRLS function
+owners for safe basic reads versus sensitive operational reads. Give them only
+required column SELECT rights; no login, runtime membership or arbitrary SQL
+entry point. Safe readers have no contact/cost/audit/financial column rights.
+Resource-specific policies bind their queries to the current verified identity,
+company and permission. Sensitive-reader policies must reject Viewer and every
+unapproved role/resource combination. Reading products must not imply cost
+permission; reading basic order status must not imply financial/body access.
 
-RLS remains enabled. Resource-aware read policies enforce active company,
-verified session, membership and approved action; no Viewer contact/audit
-policy, blanket SELECT or business write policies. No anon/authenticated/
-service_role/authenticator grants or new exposed Supabase schemas.
-Default-deny direct mutations plus guarded wrappers preserve ledger integrity.
-Do not FORCE RLS on the existing owner command chain without redesign/testing.
+**RLS-enforced ordinary writes:** dedicated non-owner write-function owners
+receive only necessary DML/column privileges. Products INSERT/UPDATE policies
+require same-company Owner/Admin product-write permission with both USING and
+WITH CHECK protection. Draft policies require an authorized draft writer and
+both old/new state remaining ordinary draft, with immutable company identity.
+Staff cannot select the posting policy by changing an input action string.
+Existing guards plus explicit column whitelists prevent post/edit escalation.
+
+New non-owner read/write definers are therefore subject to RLS even when an API
+check is missing. Read projections and column grants additionally protect
+hidden columns: RLS is row filtering, not column masking. Never use
+SELECT * or default owner-bypass views to implement Viewer projections.
+
+The seven core owner-context functions are a **documented RLS exception**:
+table owners bypass RLS without FORCE. Existing posting/ledger/deferred code
+remains unchanged/private and reachable only through audited database-side
+authorization wrappers. API checks are not the boundary. Prove wrapper
+authorization/company scoping under direct SQL calls; do not claim RLS filters
+these owner bodies. If all privileged internals must themselves be subject to
+RLS, stop for a separately approved redesign/forced-RLS proposal and full
+regression tests. Do not silently FORCE RLS or weaken ledger checks.
+
+The non-owner function-ownership/deployment topology is new work: review SET
+authority, temporary schema CREATE, revocation and creator-specific global
+function defaults for each new function owner. Preserve stockwise_owner's
+no-parent-membership invariant and the existing migrator graph; do not edit the
+prerequisite scripts to grant blanket authority.
+
+Policies and helper checks must deny inactive companies, invalid/revoked
+sessions and removed memberships. No blanket SELECT/DML, Viewer contact/audit
+policy, or anon/authenticated/service_role/authenticator grant. Keep private
+schemas out of Data API/GraphQL/Realtime exposure.
+
+**Anti-inference contract:** Viewer endpoints, detail/line routes, joins,
+search/filter/sort/group/count/summary queries, errors and exports must not
+return or predicate on hidden contact/cost/financial/audit fields. Reject
+unapproved fields before query execution; no cost-based filters, valuation/
+margin aggregates, contact-derived labels or signed export links. Restrict
+database functions/views and column ACLs too, not just response serialization.
+Do not promise to prevent copying legitimately visible facts; prevent hidden
+data and query-oracle disclosure.
 
 All new definers need NOLOGIN ownership, fixed search_path, qualified references,
 no unsafe dynamic SQL and explicit minimal EXECUTE grants. Recheck effective
 privileges and caller search_path/temp-table attacks. Existing global owner
 default hardening remains mandatory.
+
+### Step 6A — company-scoped audit requirements
+
+Audit product create/edit, draft create/edit, posting, stock adjustments,
+reversal, export authorization/outcome, invitations/acceptance/revocation,
+membership add/remove and every role change. Store company, verified actor,
+session/request correlation, action, target ID, timestamp, outcome and minimal
+approved changed-field/before-after metadata. Never log JWTs, proofs, passwords,
+invitation tokens/links or unrestricted request bodies.
+
+Mutations and their success audit commit atomically: audit failure rolls back
+product/draft/order/stock/membership/invitation effects. Keep core ledger audit
+unchanged and add verified-human events; retries must not duplicate success
+effects or erase the first actor. Use company-aware keys and append-only
+constraints, including protection from ordinary UPDATE/DELETE/TRUNCATE.
+Only trusted functions append; ordinary runtime cannot forge or alter events.
+
+Viewer never reads audits; Staff has no approved audit-read permission.
+Owner/Admin audit viewing remains a separate pending permission despite their
+audited actions. RLS enforces company isolation for any eventual audit reader.
+
+Exports require Owner/Admin and current allowed dataset/column permissions at
+request and delivery. Audit authorization before releasing any data; correlate
+completed/failed/aborted outcomes to the same company/request. Do not claim
+network delivery is atomic with a SQL transaction or roll back already sent
+bytes. A stored export must stay private, be scoped to company/requester and
+recheck current authorization on download; no reusable public URL. Export job
+and audit creation can be atomic; generation/streaming failures need explicit
+durable outcomes. Denied attempts use a separate safe security-event path that
+does not commit a rejected business transaction or expose guessed IDs.
 
 ### Step 7 — implement backend contracts only after approval
 
@@ -294,6 +407,8 @@ Potential later CommonJS modules; no modules are created by this plan:
 | server/security/session-status.cjs | Authoritative session checks, local tombstones, revocation/freshness contract |
 | server/security/transaction.cjs | Separate pools, proof issuance/activation, deadlines, rollback/discard |
 | server/security/permissions.cjs | Explicit action vocabulary and deny-unapproved behavior |
+| server/security/read-contracts.cjs | Role/resource column allowlists and rejection of hidden-field predicates |
+| server/security/audit.cjs | Verified company-scoped audit contract, atomic mutations and export outcomes |
 | server/security/invitations.cjs | Verified recipient acceptance; no generic membership writes |
 | server/workers/onboarding.cjs | Separately scoped trusted company/first-owner workflow |
 | server/workers/invite-delivery.cjs | Outbox delivery without raw-token logging/storage |
@@ -301,16 +416,28 @@ Potential later CommonJS modules; no modules are created by this plan:
 | server/routes/business.cjs | Input validation and per-operation authorization around narrow DB entry points |
 | server/security/errors.cjs | Generic 401/403 and allowlisted errors; no token/parameter/DB URL leakage |
 
-Future API contracts, not endpoints created now:
+Future API contracts, not endpoints created now. Every row requires verified
+session + active same-company membership + its action; database functions and
+RLS enforce those checks independently of route visibility.
 
-- GET authorized companies/products/inventory/orders: verified session and
-  read permission for the selected company; no body user_id is authoritative.
-- Product/draft-order mutations and order posting/receiving: permission-specific
-  and disabled until approval. Always validate ownership of all referenced IDs.
-- Adjustment/reversal commands: Owner/Admin and valid company/order kind.
-- Invitation acceptance: signed-in verified recipient plus valid opaque token.
-- Member/export routes: absent or denied until explicit permission approval.
-- Company creation: trusted onboarding channel, not a public create-owner API.
+| Contract/resource | Required authorization |
+| --- | --- |
+| Own company/role context | Return minimal own context, not a company-member directory |
+| Product read/list/detail | Role-specific basic/sensitive projection; Viewer basic only; unresolved other read scopes deny |
+| Product create/edit | Owner/Admin; reject nested Staff updates, immutable company, atomic audit |
+| Quantity read | Viewer allowed; other role read scopes pending; no valuation or movement join leakage |
+| Movement history read | Pending per role; Viewer denied |
+| Contact read/search/write | Pending per role; Viewer denied, no implicit Staff draft lookup privilege |
+| Ordinary draft create/edit | Staff allowed; Owner/Admin draft editing pending; whitelisted fields, nested IDs company-scoped, atomic audit |
+| Whole-draft delete/cancel | Pending for every role except Viewer, which is denied; no implicit permission from line editing |
+| Draft read / posted order read | Staff editable draft projection; Viewer ID/status only; posted details/financial fields separately authorized |
+| Post sale/purchase/receive | Owner/Admin only; real kind and ledger checked; Staff/Viewer denied |
+| Adjustment / reversal | Owner/Admin only; no alternative draft route to bypass |
+| Export request/generate/download | Owner/Admin + dataset/field permission + current membership; Staff/Viewer denied regardless of file/job ID |
+| Membership list/invite/remove/role change | Owner/Admin + target-role ceiling + last-owner rules; Staff/Viewer denied |
+| Invitation accept | Verified intended recipient + valid token/issuer/expiry; cannot select company or granted role |
+| Audit list/detail | Viewer denied; other read scopes pending, no indirect export access |
+| Company / first Owner | Trusted onboarding channel only |
 
 HTTP handlers never receive administrative pools or provider-admin secrets.
 Use strict input schemas, parameterized SQL, idempotency keys and bounded
@@ -339,15 +466,16 @@ permission/security phase, not edits to their historical checksums.
 | Object/change | Purpose and constraints |
 | --- | --- |
 | identities / issuers refinement | Unique exact issuer/subject, enabled status; no passwords/JWTs/credentials; deterministic opaque-ID comparisons |
-| company_memberships refinement | Company/identity composite key and FKs, Owner/Admin/Viewer only, status/revoked_at/version checks; no pending invitation treated as active membership |
-| role_permissions | Reviewed role/action catalogue; unapproved action absent/denied; caller cannot edit it |
+| company_memberships refinement | Company/identity composite key and FKs, Owner/Admin/Staff/Viewer only; Operator deprecated/denied, no automatic promotion; status/revoked_at/version checks |
+| role_permissions | Reviewed role/resource/action and field-tier catalogue; unapproved access absent/denied; caller cannot edit it |
 | company_security_state | One row per company FK, pending/active/suspended state, first-owner/recovery markers; avoids changing core 0001 |
 | onboarding_requests | Trusted initiator, unique idempotency key and payload fingerprint, company FK, checked workflow state |
 | company_invitations | Company-aware keys, recipient/issuer/role/purpose, unique token hash, expiry/revocation/acceptance fields, constrained first-owner pending uniqueness |
 | invitation_outbox | Invitation/company FKs, delivery generation/idempotency, attempts/status; no raw token/link |
 | verified_sessions | Issuer/session uniqueness, matching identity FK, expiry/revocation/version; tombstones cannot be reset by old JWT |
 | request_proofs refinement | Required matching session+identity FK, PID/full-xid uniqueness, bounded expiry; no legacy proof path that omits session validation |
-| security_events / command_audit | Append-only trusted actor kind/id, company/request/action/target, minimal before/after role metadata; company-aware order FKs and command idempotency |
+| security_events / command_audit | Append-only verified company/actor/session/request/action/target/outcome for every audited operation, protected payload, company-aware keys, idempotency; hidden from Viewer |
+| export_requests | Company/requester and authorized dataset/projection, status/outcome and audit correlation; private delivery with fresh authorization |
 
 Membership-changing functions and deferred integrity checks must prevent an
 active company with no eligible Owner. Document a consistent lock order before
@@ -364,7 +492,12 @@ Do not retain raw access/refresh tokens or plaintext invitation tokens.
 
 ## 5. Dependencies, hosted assumptions and release risks
 
-- Full pending matrix and field-level/privacy approval.
+- Pending read/field scopes, Staff draft scope, role ceilings, ownership transfer,
+  export datasets and product archive/delete policy. Confirmed permissions above
+  are not pending again; implementation/deployment approval is still separate.
+- Non-owner reader/writer ownership and RLS policy topology must be implemented
+  and tested under separate approval; old owner-bypass read prototypes are not
+  evidence that the new policy boundary works.
 - Authoritative provider-session revocation contract; actual project signing
   settings, key rotation, session IDs and available restricted validation.
 - Provider email verification/alias behavior and invite delivery/rate limits.
