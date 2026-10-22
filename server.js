@@ -67,6 +67,10 @@ function getPool() {
   const ssl = { rejectUnauthorized: true };
   if (process.env.SUPABASE_DB_CA_CERT) {
     ssl.ca = process.env.SUPABASE_DB_CA_CERT;
+  } else if (connectionUrl.hostname.endsWith(".pooler.supabase.com")) {
+    // Public Supabase root CA, downloaded from the official dashboard source.
+    // Keep normal chain and hostname verification enabled.
+    ssl.ca = fs.readFileSync(path.join(__dirname, "certs", "supabase-ca.crt"), "utf8");
   }
 
   pool = new Pool({
