@@ -5,13 +5,15 @@
   "private": true,
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test:security:offline": "python3 tests/security/run-offline.py"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "express": "^5.3.0",
+    "jose": "6.2.13",
     "pg": "^8.23.1"
   }
 }
