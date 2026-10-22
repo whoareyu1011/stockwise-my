@@ -1,0 +1,1 @@
+- [Approved security planning decisions](security-planning-decisions.md) — Supabase Auth, narrower Viewer scope and protected onboarding; approval covers planning only.
