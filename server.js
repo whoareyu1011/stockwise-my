@@ -8,6 +8,32 @@ const port = Number(process.env.PORT) || 5000;
 const indexPath = path.join(__dirname, "index.html");
 let pool;
 
+function safeDatabaseTarget() {
+  try {
+    const url = new URL(process.env.DATABASE_URL);
+    return {
+      hostname: url.hostname,
+      port: Number(url.port) || 5432,
+      username: decodeURIComponent(url.username),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function safeDatabaseError(error) {
+  const message = String(error.message || "Unknown database error")
+    .replace(/postgres(?:ql)?:\/\/[^\s"'<>]+/gi, "[REDACTED_DATABASE_URL]")
+    .replace(/\b(password|passwd|pwd)\s*[:=]\s*([^\s,;]+)/gi, "$1=[REDACTED]");
+
+  return {
+    ...safeDatabaseTarget(),
+    name: error.name || "Error",
+    code: error.code || "UNKNOWN",
+    message,
+  };
+}
+
 function getPool() {
   if (pool) return pool;
 
@@ -52,10 +78,7 @@ function getPool() {
   });
 
   pool.on("error", (error) => {
-    console.error("[database] Idle connection error", {
-      name: error.name,
-      code: error.code || "UNKNOWN",
-    });
+    console.error("[database] Idle connection error", safeDatabaseError(error));
   });
 
   return pool;
@@ -66,12 +89,9 @@ app.get("/api/health/db", async (_request, response) => {
     await getPool().query("SELECT NOW()");
     response.json({ success: true, database: "connected" });
   } catch (error) {
-    // Do not log error.message or the connection URL; driver errors may contain
-    // connection details. The error class and PostgreSQL/network code are safe.
-    console.error("[database] Health check failed", {
-      name: error.name || "Error",
-      code: error.code || "UNKNOWN",
-    });
+    // Report sanitized driver details and parsed connection target fields only.
+    // Never log the full URL or password.
+    console.error("[database] Health check failed", safeDatabaseError(error));
     response.status(503).json({
       success: false,
       database: "disconnected",
