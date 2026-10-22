@@ -157,18 +157,33 @@ the fresh cluster's deterministic locale.
 | Operation | Owner | Admin | Staff | Viewer |
 | --- | --- | --- | --- | --- |
 | Create/edit products | Yes | Yes | No | No |
-| Create ordinary drafts | Pending | Pending | Yes, new own drafts | No |
-| View/edit existing ordinary drafts | All company drafts, scoped | All company drafts, scoped | Own drafts only, scoped | Basic status only; no editing |
+| Create ordinary drafts | Yes | Yes | Own sales drafts | No |
+| View/edit existing ordinary drafts | All company drafts, scoped | All company drafts, scoped | Own sales drafts only, scoped | Basic status only; no editing |
 | Reassign / transfer / take over drafts | No | No | No | No |
+| Cancel eligible drafts | Company drafts | Company drafts | Own sales drafts | No |
+| Hard-delete drafts/posted orders or silently edit posted orders | No | No | No | No |
 | Post ordinary orders | Yes | Yes | No | No |
 | Adjust stock / reverse orders | Yes | Yes | No | No |
 | Export permitted data | Yes, scoped | Yes, scoped | No | No |
-| Manage same-company members | Yes, scoped | Yes, scoped | No | No |
-| Basic products / quantities / order status | Other read scopes pending | Other read scopes pending | Draft workflow scope; other reads pending | Yes, no contacts/costs/audit |
+| Manage same-company members | Admin/Staff/Viewer | Staff/Viewer only | No | No |
+| Business financials / movements / redacted audit | Company duty scope | Company duty scope | Own sales financial fields only; no costs/history/audit | No |
+| Basic products / quantities / order status | Company scope | Company scope | Sales products/quantities; own-work status | Yes, no contacts/costs/financials/history/audit |
 | Direct business DML / audit modification | No | No | No | No |
 
-The detailed resource/field matrix, pending financial/contact/movement/audit
-read permissions and role-assignment ceilings are in NEXT-IMPLEMENTATION-PLAN.
+The detailed resource/field defaults, eligible cancellation contract, export
+dataset allowlist and role ceilings are in NEXT-IMPLEMENTATION-PLAN section 2.
+Owner/Admin access covers business duties, never authentication internals.
+Staff initially works only on own-origin sales orders: minimal customer
+selection/linked billing details, sales prices/discount/tax/totals, no costs,
+supplier records, history or audits. Posted/cancelled own-work reads remain
+read-only. These narrower work/field boundaries are explicit review assumptions.
+Owner can manage Admin/Staff/Viewer; Admin cannot manage peers/Owner/itself.
+No additional Owner appointments or ownership transfer in this phase.
+Owner/Admin exports are limited to company business profile, products/valuation,
+contacts, orders/lines, quantities/movements and redacted business audit, with
+normal field/company restrictions and no credential/auth/security datasets.
+Cancellation is terminal, audited, idempotent and stock-neutral; it requires a
+future reviewed additive design and tests, not presumed support in core 0001.
 Staff draft ownership is confirmed: derive immutable creator from verified
 identity; authorize company and creator for list/detail/line reads and edits.
 Owner/Admin may manage existing drafts across creators only in their company;
@@ -292,8 +307,8 @@ hook. The frontend remains its existing unauthenticated browser-data prototype.
    isolation, or request an alternative design using a trusted JWT gateway
    instead of direct PostgreSQL request connections. That alternative has not
    been implemented or tested here.
-3. Use the confirmed four-role matrix; resolve its marked field/target-role
-   decisions, first-owner bootstrap, invitations, account disabling, last-owner
+3. Review the concrete four-role defaults/assumptions, first-owner bootstrap,
+   invitations, account disabling, last-owner
    safeguards and audit retention.
 4. Approve future credential separation and removal of admin credentials from
    internet-facing processes; no configuration/secrets were changed today.

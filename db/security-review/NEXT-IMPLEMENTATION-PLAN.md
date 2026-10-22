@@ -10,11 +10,19 @@ The user's approved planning decisions are:
 
 - Supabase Auth is the authentication provider.
 - Product creation/editing is Owner/Admin only.
-- Staff may create ordinary order drafts and view/edit only drafts they created
+- Owner/Admin and Staff may create ordinary order drafts. Staff may view/edit only drafts they created
   within their company. Owner/Admin may view/manage all drafts in their company.
   Only Owner/Admin may post; Staff cannot directly modify posted orders.
 - Draft reassignment, transfer and takeover are out of scope.
 - Exports and membership management are Owner/Admin only.
+- Owner/Admin may access company business data needed for their duties; Staff
+  receives only customer/order/financial fields necessary for assigned work.
+  The conservative initial work/field defaults are specified in section 2.
+- Eligible drafts may be cancelled with audit, not hard-deleted. Posted orders
+  can change only through authorized audited workflows, never silent editing.
+- Owner manages company roles; Admin manages ordinary membership only within
+  the limits below. Admin/Staff cannot appoint Owner or elevate themselves.
+  Company ownership transfer remains out of scope.
 - Viewer sees products, stock quantities and basic order status only; contact
   details, costs and audit logs are hidden.
 - Stock adjustments and order reversals are Owner/Admin only.
@@ -52,7 +60,8 @@ Supabase. Their documented initial fixture/script failures remain unchanged.
 3. Owner/Admin product creation/editing, posting, exports and membership
    management are now confirmed. Staff draft permissions are confirmed, but
    Staff must not inherit the old Operator's posting permission.
-   Unspecified read/financial fields and grantable-role ceilings remain pending.
+   Section 2 now defines conservative field and grantable-role defaults;
+   these are planning contracts, not implemented permissions.
 4. Offline JWT validation alone does not establish provider-session revocation.
    A trusted session-status mechanism and tests are required.
 5. Invitations, first-owner activation and last-owner protection were deferred;
@@ -66,34 +75,34 @@ future implementation uses separate reviewed changes and new test evidence.
 
 ## 2. Permission matrix — no silent approvals
 
-**A** = confirmed allowed; **D** = denied; **P** = not explicitly approved,
-deny until decided. **A(scope)** permits the workflow but not every field or
+**A** = allowed by the confirmed rules and documented safe planning defaults;
+**D** = denied. **A(scope)** permits the workflow but not every field or
 target role. There is no implicit “Owner can do everything”.
 
 | Resource / operation | Owner | Admin | Staff | Viewer |
 | --- | --- | --- | --- | --- |
-| Product basic read | P (operational read proposed) | P (operational read proposed) | P (draft selector proposed) | A |
+| Product basic read | A | A | A(scope) — sales fields | A — no financial fields |
 | Product create/edit | A(scope) | A(scope) | D | D |
-| Product archive/hard delete | P | P | D | D |
-| Product costs / valuation / margins | P | P | P | D |
-| Stock quantities | P (operational read proposed) | P (operational read proposed) | P | A |
-| Detailed stock movements/history | P | P | P | D |
-| Contact details/list/edit | P | P | P (minimal draft selector undecided) | D |
-| Create ordinary drafts | P | P | A(scope) — new own drafts | D |
-| Edit existing ordinary drafts | A(scope) — all company drafts | A(scope) — all company drafts | A(scope) — own drafts only | D |
-| Delete/cancel an entire draft | P | P | P | D |
-| Read editable draft body/lines | A(scope) — all company drafts | A(scope) — all company drafts | A(scope) — own drafts only, approved fields | D |
-| Basic order status, including draft/posted state | A for company drafts; posted P | A for company drafts; posted P | A for own drafts only; posted P | A |
+| Product archive / hard delete | Archive only / D | Archive only / D | D | D |
+| Product costs / valuation / margins | A | A | D | D |
+| Stock quantities | A | A | A | A |
+| Detailed stock movements/history | A | A | D | D |
+| Contact details/list/edit | A(scope) | A(scope) | A(scope) — customer selector/linked work reads only; no contact edits | D |
+| Create ordinary drafts | A | A | A(scope) — new own sales drafts | D |
+| Edit existing ordinary drafts | A(scope) — all company drafts | A(scope) — all company drafts | A(scope) — own sales drafts only | D |
+| Cancel eligible draft / hard delete | A / D | A / D | A(scope) — own sales draft / D | D / D |
+| Read editable draft body/lines | A(scope) — all company drafts | A(scope) — all company drafts | A(scope) — own sales drafts only, approved fields | D |
+| Basic order status, including draft/posted state | A | A | A(scope) — own sales work | A |
 | Reassign / transfer / take over draft creator | D — out of scope | D — out of scope | D — out of scope | D |
-| Posted-order body/lines beyond basic status | P | P | P | D |
-| Order financial fields: prices/discounts/totals/tax/cost/margin | P | P | P — no implied financial access | D |
+| Posted-order body/lines beyond basic status | A(scope) | A(scope) | A(scope) — own-origin sales fields, read-only | D |
+| Order financial fields: prices/discounts/totals/tax/cost/margin | A(scope) | A(scope) | A(scope) — sales price/discount/tax/total only; no cost/margin | D |
 | Post ordinary orders / receive stock by posting a purchase | A | A | D | D |
 | Adjust stock, including opening-balance entry | A | A | D | D |
 | Reverse orders | A | A | D | D |
 | Export/download company data | A(scope) | A(scope) | D | D |
 | Company membership records and management | A(scope) | A(scope) | D (except own minimal context) | D (except own minimal context) |
-| Transfer ownership / appoint additional Owners | P — protected workflow | P (deny proposed) | D | D |
-| Read audit logs | P | P | P (deny proposed) | D |
+| Transfer ownership / appoint additional Owners | D — out of scope | D | D | D |
+| Read business audit logs | A(scope) | A(scope) | D | D |
 | Modify/delete audit logs or direct database writes/grants | D | D | D | D |
 | Company creation / first-owner appointment | Trusted onboarding workflow only | Trusted onboarding workflow only | Trusted onboarding workflow only | Trusted onboarding workflow only |
 
@@ -106,7 +115,7 @@ a draft payload. Posted/reversed orders are immutable to draft editors.
 company membership and immutable creator identity for every draft list, detail,
 search/count, header edit and line read/edit. Staff cannot view another creator's
 draft, even its basic status, by guessing an ID or belonging to the same company.
-Owner/Admin may view and edit all existing ordinary drafts in their company
+Owner/Admin may create, view and edit ordinary drafts in their company
 regardless of creator, but cannot bypass company or field restrictions. Their
 management does not change the original creator. Viewer can see only the
 permitted basic status projection and cannot create/edit drafts.
@@ -118,31 +127,100 @@ key, not current role, email or display name. Missing/unverified creator metadat
 must not make a legacy draft available to Staff. No automatic ownership backfill,
 reassignment, transfer or takeover, including by Owner/Admin or nested edits.
 
-“Receiving” means posting a purchase. A Staff receipt draft must not move stock
-until an authorized Owner/Admin posts it. Staff may edit approved draft lines,
-but deletion/cancellation of the entire order is not inferred from editing.
-Validate actual order kind and final
-state, not route names. Staff cannot create a privileged adjustment/reversal
-through the ordinary-draft path.
+“Receiving” means posting a purchase. Initially purchasing/receipt drafts are
+Owner/Admin work; Staff work is own sales drafts only (explicit safe assumption,
+not a newly implemented assignment feature). Validate actual kind and state,
+not route names. Staff cannot create adjustment/reversal or purchase drafts
+through a generic draft endpoint.
 
 **Viewer projection:** basic non-cost product fields, stock quantity by product,
 and opaque order ID/status only by default. No contact identifiers/details,
 free-text notes/contact-derived references, order lines, unit prices, totals,
-cost snapshots, valuation, movements or audit data. Additional safe fields
-such as order date and selling price need field-level confirmation.
+cost snapshots, valuation, movements or audit data. Selling prices and order
+dates are not included in the initial Viewer projection.
 
-**Still undecided:** operational read scopes outside the confirmed draft scope;
-editable prices/discounts and contact selectors; Owner/Admin creating new
-drafts; financial/cost/contact/movement/audit visibility;
-product archive/delete and whole-draft deletion; exact export datasets; role-assignment ceilings and
-ownership transfer. Membership management is approved for Owner/Admin, but that
-does not authorize self-promotion or arbitrary Owner grants. Proposed safe
-ceiling: both may manage Staff/Viewer; Admin-to-Admin and Owner appointment
-require explicit decisions. Exports are intersected with approved read/field
-permissions, not a bypass to hidden data.
+### Concrete work, field and membership defaults
 
-Pending read/field decisions can block a usable posting/editing interface;
-resolve them before implementation rather than silently expanding access.
+- **Owner/Admin:** same-company operational products (including cost/valuation),
+  contacts, orders/items and sales/purchase financials, stock quantities/history
+  and redacted business audit. This never includes auth secrets, session/proof
+  tables, raw invitation tokens or administrative credentials. Business data
+  needed for duties does not mean arbitrary SQL or provider-admin access.
+- **Staff work assignment assumption:** immutable creator identifies initial
+  assigned sales work; no separate assignment/reassignment feature. Staff may
+  view/edit own sales drafts and read the same limited sales projection after
+  posting/cancellation, never edit posted/cancelled orders. Other creators'
+  work, purchasing/supplier records and company-wide order aggregates deny.
+- **Staff field allowlist:** product ID/SKU/name/unit/active state/selling price
+  and available quantity; customer selection returns ID/display name only.
+  For a customer linked to their own sales work, allow billing name/address,
+  business invoice email/phone and tax/registration identifiers needed for that
+  order. No full contact-directory detail, unrelated contacts, supplier/bank/
+  internal notes or contact mutation. Customer lookup does not grant access
+  to another creator's draft.
+- **Own sales fields:** own order ID/status/date/customer reference, product/
+  quantity/unit/selling price, bounded discount, tax classification/rate and
+  calculated line/order totals. Only draft inputs are editable; totals are
+  trusted calculations, never caller-written snapshots. Reject negative prices,
+  discounts exceeding gross amount and arbitrary tax rates; use configured
+  company tax/price rules. No purchase cost, inventory valuation, margin/profit,
+  stock history or audit reads. New fields deny until explicitly allowlisted.
+- **Membership ceiling:** Owner may invite/revoke/change Admin/Staff/Viewer.
+  Admin may invite/revoke/change only Staff/Viewer, not Admin peers, Owner or
+  itself. No self-role edits, Owner invitations/additional Owners, ownership
+  transfer or last-Owner removal/demotion. Changing an existing member's role
+  uses an explicit audited action, not invite acceptance/upsert.
+- **Archive default:** Owner/Admin may mark products/contacts inactive, not
+  hard-delete referenced records; Staff/Viewer cannot. Existing historical
+  references remain intact and inactive records cannot be selected for new work.
+
+### Cancellation contract
+
+An eligible draft is an ordinary, not-yet-posted/non-reversed/non-cancelled
+order with no stock effects or externally finalized obligation. Owner/Admin
+may cancel such company drafts; Staff may cancel only their own sales drafts.
+Require reason, verified actor and idempotency key; keep header/items/creator,
+record terminal cancellation and atomic success audit. No hard deletion,
+uncancel, reopening, stock adjustment or automatic reversal.
+
+Serialize cancellation, editing and posting on the same parent lock and recheck
+effective state/authorization. Same-key/same-payload retries return the original
+authorized result, not a second audit; changed payload rejects. A cancelled
+draft cannot be edited/posted. If posting won, draft cancellation rejects:
+Owner/Admin must separately request the audited reversal workflow with all
+stock/deferred checks. No generic posted-order DELETE/UPDATE/cancel shortcut.
+
+The prepared core migration is unchanged and not assumed to support this
+cancellation state. A future reviewed additive cancellation record/guard design
+must block all posting/edit paths (including private-core access restrictions),
+preserve deferred invariants and prove race behavior before release. No SQL is
+prepared/applied by this document.
+
+### Export dataset allowlist
+
+Owner/Admin only: company business profile, product catalogue/valuation,
+customer/supplier business contacts, orders and lines (including approved
+financials), quantity balances, stock movement history and redacted business
+audit events. Same-company predicates and normal dataset/field permissions
+apply to every join/filter/aggregate and download. No raw database dumps,
+membership/auth-directory export, sessions, JWTs, passwords, secrets, proofs,
+invitation links/tokens, provider metadata, internal security events or
+unrestricted audit payloads. Attachments/invoices/integrations not implemented
+in this phase do not become export features. Audit exports use a fixed business
+projection with no authentication identifiers or secret-bearing metadata.
+
+### Remaining assumptions and release gates
+
+The sales-only Staff scope, own-origin posted/cancelled read projection, precise
+field allowlists, cancellation eligibility, archive-only deletion policy and
+single-Owner model are conservative defaults selected for review, not claims
+of implementation or pre-existing capabilities. Broader Staff purchasing/
+assignment, Owner appointment/transfer, reopening and bulk deletion remain out
+of scope. Tax configuration/rounding and allowed price/discount rules must be
+specified before financial validation is implemented; deny unconfigured cases.
+Provider signing/session-revocation details, invitation expiry/delivery,
+onboarding initiator, recovery, retention, hosting and deployment topology still
+need the release decisions below. No open permission cell grants broader access.
 
 ## 3. Implementation sequence and approval gates
 
@@ -152,7 +230,8 @@ Approve the complete matrix, field allowlists, first-owner identity rules,
 onboarding initiator, invitation lifetime, session-revocation standard and
 retention. Translate approved actions into a server/database permission catalogue.
 Unknown actions and roles must deny. No deployment can compensate for an
-unapproved permission matrix.
+unimplemented authorization boundary. Review the explicit defaults and
+remaining operational assumptions before implementation approval.
 
 ### Step 2 — separate deployment, verification and business identities
 
@@ -290,7 +369,9 @@ retired explicitly before creating a replacement pending invitation.
 
 **Member changes:** Owner/Admin may manage same-company memberships through
 authorized wrappers. Staff/Viewer cannot list other members or mutate them.
-Check target-role ceilings separately; unresolved elevations deny.
+Owner manages Admin/Staff/Viewer; Admin manages Staff/Viewer only, never
+Owner/Admin peers or itself. Owner grants/transfer and all self-role changes deny.
+Expose only company business directory fields, not issuer/subject or auth data.
 Never let a caller assign a role it cannot grant,
 approve its own elevation or create arbitrary Owner invitations.
 Removal is soft revocation, not deletion of historic identities/audit.
@@ -335,6 +416,13 @@ Owner/Admin have no manual movement insert/edit/delete endpoint.
 owners for safe basic reads versus sensitive operational reads. Give them only
 required column SELECT rights; no login, runtime membership or arbitrary SQL
 entry point. Safe readers have no contact/cost/audit/financial column rights.
+Separate Viewer-safe readers, Staff sales/customer readers and Owner/Admin
+business readers. Staff policies enforce own-origin sales scope, including its
+read-only posted/cancelled projection; contact-detail reads require a linked
+authorized own order, not just a caller-supplied customer ID. Selector-only
+readers expose ID/name, not billing details. Fixed-purpose functions and column
+ACLs keep these tiers distinct; never let a caller choose a stronger resource
+or field tier by setting query context.
 Resource-specific policies bind their queries to the current verified identity,
 company and permission. Sensitive-reader policies must reject Viewer and every
 unapproved role/resource combination. Reading products must not imply cost
@@ -345,6 +433,8 @@ receive only necessary DML/column privileges. Products INSERT/UPDATE policies
 require same-company Owner/Admin product-write permission with both USING and
 WITH CHECK protection. Draft policies require an authorized draft writer and
 both old/new state remaining ordinary draft, with immutable company identity.
+The Staff branch also requires sales kind and absence of terminal cancellation.
+Cancellation has a separate guarded audited command, not a free-form state edit.
 For Staff, SELECT/UPDATE policies and every database draft entry point require
 the stored creator to equal the current verified identity. UPDATE USING
 checks the old row; WITH CHECK validates the new row, while guards/column ACLs
@@ -402,7 +492,8 @@ default hardening remains mandatory.
 
 ### Step 6A — company-scoped audit requirements
 
-Audit product create/edit, draft create/edit, posting, stock adjustments,
+Audit product create/edit/archive, contact changes/archive, draft
+create/edit/cancellation, posting, stock adjustments,
 reversal, export authorization/outcome, invitations/acceptance/revocation,
 membership add/remove and every role change. Store company, verified actor,
 session/request correlation, action, target ID, timestamp, outcome and minimal
@@ -417,8 +508,9 @@ constraints, including protection from ordinary UPDATE/DELETE/TRUNCATE.
 Only trusted functions append; ordinary runtime cannot forge or alter events.
 
 Viewer never reads audits; Staff has no approved audit-read permission.
-Owner/Admin audit viewing remains a separate pending permission despite their
-audited actions. RLS enforces company isolation for any eventual audit reader.
+Owner/Admin may read the redacted company business audit projection, not
+authentication/security internals. RLS enforces company isolation for audit
+readers; Staff and Viewer have no audit-read access.
 
 Exports require Owner/Admin and current allowed dataset/column permissions at
 request and delivery. Audit authorization before releasing any data; correlate
@@ -457,23 +549,23 @@ RLS enforce those checks independently of route visibility.
 | Contract/resource | Required authorization |
 | --- | --- |
 | Own company/role context | Return minimal own context, not a company-member directory |
-| Product read/list/detail | Role-specific basic/sensitive projection; Viewer basic only; unresolved other read scopes deny |
+| Product read/list/detail | Owner/Admin business fields; Staff sales allowlist; Viewer nonfinancial basic fields only |
 | Product create/edit | Owner/Admin; reject nested Staff updates, immutable company, atomic audit |
-| Quantity read | Viewer allowed; other role read scopes pending; no valuation or movement join leakage |
-| Movement history read | Pending per role; Viewer denied |
-| Contact read/search/write | Pending per role; Viewer denied, no implicit Staff draft lookup privilege |
-| Ordinary draft create | Staff creates a new own draft with verified immutable creator; Owner/Admin creation pending; field whitelist and atomic audit |
-| Ordinary draft edit | Staff only their own; Owner/Admin all company drafts; current ordinary-draft state, parent/line authorization, immutable company/creator, atomic audit |
-| Whole-draft delete/cancel | Pending for every role except Viewer, which is denied; no implicit permission from line editing |
-| Draft list/detail/search/count/lines | Staff only their own drafts; Owner/Admin all company drafts; no foreign-company or other-creator leakage; permitted field projections only |
-| Basic status / posted order read | Viewer ID/status only; Staff draft status only for own drafts; posted details/financial fields separately authorized |
+| Quantity read | All four roles, same company; costs/valuation only Owner/Admin, no history join leakage |
+| Movement history read | Owner/Admin only |
+| Contact read/search/write | Owner/Admin business management/archive; Staff customer selector + linked own-work read allowlist only; Viewer denied |
+| Ordinary draft create | Owner/Admin ordinary drafts; Staff own sales drafts; verified immutable creator, field whitelist and atomic audit |
+| Ordinary draft edit | Staff only their own sales drafts; Owner/Admin all company drafts; current ordinary-draft state, parent/line authorization, immutable company/creator, atomic audit |
+| Whole-draft cancellation | Owner/Admin eligible company drafts; Staff eligible own sales drafts; terminal audited/idempotent command, no stock effects or hard delete |
+| Draft list/detail/search/count/lines | Staff only their own sales drafts; Owner/Admin all company drafts; no foreign-company or other-creator leakage; permitted field projections only |
+| Basic status / posted order read | Viewer ID/status only; Staff own-origin sales projection read-only after posting/cancellation; Owner/Admin company business projection |
 | Draft reassignment / transfer / takeover | No route or database entry point; reject creator-changing payloads for every role |
 | Post sale/purchase/receive | Owner/Admin only; real kind and ledger checked; Staff/Viewer denied |
 | Adjustment / reversal | Owner/Admin only; no alternative draft route to bypass |
 | Export request/generate/download | Owner/Admin + dataset/field permission + current membership; Staff/Viewer denied regardless of file/job ID |
-| Membership list/invite/remove/role change | Owner/Admin + target-role ceiling + last-owner rules; Staff/Viewer denied |
+| Membership list/invite/remove/role change | Owner manages Admin/Staff/Viewer; Admin manages Staff/Viewer only; no self-elevation, Owner changes or transfer; Staff/Viewer denied |
 | Invitation accept | Verified intended recipient + valid token/issuer/expiry; cannot select company or granted role |
-| Audit list/detail | Viewer denied; other read scopes pending, no indirect export access |
+| Audit list/detail | Owner/Admin redacted company business events only; Staff/Viewer denied |
 | Company / first Owner | Trusted onboarding channel only |
 
 HTTP handlers never receive administrative pools or provider-admin secrets.
@@ -505,6 +597,7 @@ permission/security phase, not edits to their historical checksums.
 | identities / issuers refinement | Unique exact issuer/subject, enabled status; no passwords/JWTs/credentials; deterministic opaque-ID comparisons |
 | company_memberships refinement | Company/identity composite key and FKs, Owner/Admin/Staff/Viewer only; Operator deprecated/denied, no automatic promotion; status/revoked_at/version checks |
 | Immutable order-creator metadata | Future reviewed additive design: one creator per company/order, company-aware order FK and verified stable identity FK; no caller assignment, reassignment or automatic legacy backfill; child access inherits parent scope |
+| Draft cancellation metadata / guards | Future additive design only: unique company/order cancellation, reason/actor/request, terminal state and immutable original records; shared parent locking prevents post/edit races; no change to core 0001 here |
 | role_permissions | Reviewed role/resource/action and field-tier catalogue; unapproved access absent/denied; caller cannot edit it |
 | company_security_state | One row per company FK, pending/active/suspended state, first-owner/recovery markers; avoids changing core 0001 |
 | onboarding_requests | Trusted initiator, unique idempotency key and payload fingerprint, company FK, checked workflow state |
@@ -530,10 +623,12 @@ Do not retain raw access/refresh tokens or plaintext invitation tokens.
 
 ## 5. Dependencies, hosted assumptions and release risks
 
-- Pending non-draft read/field scopes, Owner/Admin new-draft creation, whole-draft
-  deletion/cancellation, role ceilings, company ownership transfer,
-  export datasets and product archive/delete policy. Confirmed permissions above
-  are not pending again; implementation/deployment approval is still separate.
+- Explicit section 2 defaults resolve field scopes, new-draft creation,
+  cancellation, role ceilings, exports and archive-only deletion for planning.
+  Staff purchasing, broader assignments, additional Owners/transfer and reopening
+  are excluded, not permissions waiting to become implicitly enabled.
+  Financial configuration, eligibility checks and retention still need exact
+  implementation contracts; implementation/deployment approval remains separate.
 - Non-owner reader/writer ownership and RLS policy topology must be implemented
   and tested under separate approval; old owner-bypass read prototypes are not
   evidence that the new policy boundary works.
@@ -554,7 +649,7 @@ Do not retain raw access/refresh tokens or plaintext invitation tokens.
 - Security implementation is incomplete until provider/backend/database/
   negative/concurrency tests pass. Do not claim deployed tenant isolation.
 
-**Next gate:** approve this implementation plan, resolve its pending permission
-and lifecycle decisions, and explicitly authorize a bounded implementation/local
+**Next gate:** review the explicit defaults, remaining operational assumptions
+and lifecycle decisions, then explicitly authorize a bounded implementation/local
 test scope. Any hosted resource, role/grant/secret change or persistent database
 execution requires its own explicit target-specific approval. None is implied.

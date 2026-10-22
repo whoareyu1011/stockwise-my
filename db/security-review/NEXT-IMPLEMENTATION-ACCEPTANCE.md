@@ -59,7 +59,12 @@ partially UNTESTED until separately approved provider tests demonstrate it.
 | Viewer posts purchases/sales, adjusts stock or reverses | Deny with no ledger/order/audit side effects |
 | Viewer reads contact/cost/financial/audit/movement data through alternate routes, joins, views or SELECT * | Deny; only basic products, quantities and order ID/status visible |
 | Staff creates a new ordinary draft | Succeed within approved fields; immutable creator is verified actor, no stock movement/posting |
-| Staff views/edits their own company draft, including its lines | Allow approved fields while still draft; atomic edit/audit, no stock effects |
+| Staff views/edits their own company sales draft, including its lines | Allow sales-field allowlist while still draft; atomic edit/audit, no stock effects |
+| Owner/Admin creates sales or purchase drafts | Allow in own company with verified immutable creator and atomic audit |
+| Staff creates purchase/adjustment drafts or requests supplier/cost fields | Deny under initial sales-only work default |
+| Staff reads customer details | Selector exposes ID/name only; billing/contact/tax fields only for customer linked to own sales work; unrelated details, supplier/bank/notes and mutations deny |
+| Staff reads/edits sales financial fields | Permit own sales draft price/bounded discount/tax inputs, calculated totals read-only; cost/margin/valuation and other creators' orders deny |
+| Staff reads own-origin posted/cancelled sales order | Allow limited own-work read projection only; no edits or private audit/history |
 | Staff views/edits another Staff member's draft in the same company | Deny detail/header/line access; list/search/count/status reveal no other-creator drafts |
 | Staff views/edits an Owner/Admin-created draft | Deny; same company alone does not confer ownership |
 | Staff accesses/edits a foreign-company draft | Deny even if its creator identity matches, or the user also belongs to that company but selected a different company |
@@ -81,10 +86,13 @@ partially UNTESTED until separately approved provider tests demonstrate it.
 | Owner/Admin membership list/invite/remove/approved role change | Succeed for same-company permitted targets; approved management is not Owner-grant authority |
 | Staff/Viewer membership records or management | Deny, except minimum own role/company context and intended-recipient invitation acceptance |
 | Owner/Admin cross-company export/member/product actions | Deny despite their elevated role in a different company |
+| Owner/Admin reads company financials, stock history and business audit | Allow approved business projection; deny foreign-company/authentication/security internals |
+| Staff/Viewer reads movement history, costs/valuation/margins or audit | Deny, including predicates/aggregates and alternate content types |
+| Product/contact archive or hard deletion | Owner/Admin archive allowed with audit; all hard-deletion paths deny, references preserved |
 | Permissions changed/removed after token or proof issuance | Next operation uses current permissions, not cached claims |
 
-For pending matrix cells, add positive tests only after approval; denial is the
-initial required result. Test field/column exposure, not merely company filters.
+Use the concrete section 2 defaults, not the old pending matrix. New/unknown
+fields and excluded actions deny. Test field exposure, not merely company filters.
 
 Viewer-specific negative coverage must include hidden-field filters/sorts,
 counts/aggregates, valuation/margins, order lines and nested JSON, free-text
@@ -120,6 +128,35 @@ commits. Staff posting and direct posted-header/line modification always fail,
 including retries and low-level database attempts. Confirm balances, movements
 and success audits are unchanged by rejected attempts.
 
+### B1. Cancellation and exports — backend and database tests
+
+- Owner/Admin cancels eligible company drafts across creators; Staff cancels
+  only their own eligible sales drafts; Viewer/other creators/other companies
+  deny. Require reason and idempotency key; original header/items/creator remain.
+- Cancellation commits with its success audit and no stock effects. Inject
+  audit/deferred failures and verify complete rollback. Same authorized retry
+  has one effect/event; changed payload rejects. Recheck membership on retries.
+- Cancelled orders cannot be edited, posted, reopened or hard-deleted. Race
+  cancellation/edit/posting on the parent: one valid serialized outcome only,
+  no posted-and-cancelled order or partial ledger. A post-first cancellation
+  rejects instead of silently invoking reversal.
+- Posted/reversed headers/lines cannot be directly deleted or silently edited
+  by any business role. Owner/Admin reversal uses authorized audited stock/
+  integrity workflows; Staff/Viewer cannot invoke it or its private core.
+- Test cancellation guards against every entry point, including permitted SQL
+  wrappers. The unchanged migration does not prove cancellation support; the
+  future additive design needs new compilation/deferred/race evidence.
+- Owner/Admin exports only the fixed company profile/product/contact/order/
+  line/quantity/movement/business-audit datasets. Compare projections with normal
+  permissions, filters and joins; no extra fields or company rows.
+- Deny auth/membership-directory exports, arbitrary table/column requests, raw
+  dumps, JWTs, credentials, proofs, raw invitation tokens/URLs, session records,
+  provider metadata, security logs and unrestricted audit JSON. Test embedded
+  payloads and spreadsheet formula escaping, not just named secret columns.
+- Staff/Viewer cannot request, generate or download any export, including old
+  private-file/job IDs and another member's link. Revoke membership between
+  request and delivery and require denial; audit every authorized outcome.
+
 ## C. Membership, onboarding and invitations
 
 | Case | Required result |
@@ -135,8 +172,13 @@ and success audits are unchanged by rejected attempts.
 | Same-recipient acceptance retry | Idempotent result, no duplicate audit/membership |
 | Existing lower role conflicts with invite role | No silent elevation; follow approved conflict rule |
 | Owner/Admin tries to invite/promote beyond grantable role | Deny, including forged Owner purpose or company ID |
+| Owner manages Admin/Staff/Viewer in own company | Allow explicit audited changes; no additional Owner appointment or self-role change |
+| Admin manages Staff/Viewer in own company | Allow explicit audited invitation/revocation/role change within those two roles |
+| Admin targets Owner/Admin peer or itself | Deny removal, role mutation, invitation/upsert and self-elevation shortcuts |
+| Admin/Staff asks for Owner creation or ownership transfer | Deny at backend and database boundaries; trusted first-owner onboarding is a separate private purpose |
+| Owner asks for additional Owner or ownership transfer | Deny under single-Owner/no-transfer default, pending separate workflow approval |
 | Member tries to change its own role or restore removed membership | Deny |
-| Last-owner removal/demotion and concurrent two-owner removal | Reject or approved atomic transfer; never active/ownerless |
+| Last-owner removal/demotion or concurrent legacy Owner changes | Reject; no active ownerless company and no transfer shortcut |
 | Emergency disable of only Owner | Disable identity safely, suspend company and require audited recovery |
 | Removed member uses still-valid session or old command key | Deny subsequent reads/writes/retries |
 | Membership revoke races authorized command | Document winner; command-first may finish, revoke-first prevents command |
@@ -203,7 +245,8 @@ email behavior remains a hosted integration gate.
 ## E1. Audit integrity and delivery outcomes
 
 - Assert company-scoped verified actor/session/request/action/target/time for
-  product changes, draft edits, posting, adjustments, reversals, exports,
+  product/contact changes and archive, draft creation/edits/cancellation,
+  posting, adjustments, reversals, exports,
   invitation lifecycle, membership changes and all role changes.
 - Mutations and success audit commit atomically. Inject audit failures and
   deferred COMMIT errors; no partial product/draft/order/stock/member/invite
@@ -212,7 +255,7 @@ email behavior remains a hosted integration gate.
   Ordinary runtime cannot UPDATE/DELETE/TRUNCATE audit rows, spoof actor/company,
   remove prior role evidence or associate an event with another company's object.
 - Viewer cannot read audit rows, event counts, joins, downloads or event metadata.
-  Staff audit reads remain denied pending approval. Any approved audit reader
+  Staff audit reads are denied. Owner/Admin business audit readers
   is subject to company policies, including Owner/Admin cross-company denial.
 - Exports have a durable authorization event before data release plus correlated
   completion/failure/abort outcomes. Denied requests release no bytes. Confirm
@@ -222,6 +265,23 @@ email behavior remains a hosted integration gate.
 - Logs/audit payloads contain no JWT, proof, credential, raw invitation token,
   secret-bearing URL or uncontrolled request body. Denial logging must not
   accidentally commit a rolled-back business operation.
+
+## E2. Explicit default assumptions requiring review before implementation
+
+Staff starts with own-origin sales work, not purchasing or a new assignment
+system. Customer fields and sales financial fields use the fixed allowlists in
+the plan; unit prices, discounts and tax must pass configured company rules.
+Test missing configuration fails closed, invalid numeric/rate values reject,
+trusted totals are recalculated and submitted totals cannot override them.
+Viewer has no financial fields, including selling prices.
+
+Owner/Admin new-draft creation, eligible audited cancellation, archive instead
+of hard deletion, allowed business export datasets and membership ceilings are
+now defined; do not retain the old pending expectations. Additional Owners,
+ownership transfer, Staff purchasing, reassignment and cancelled-order reopening
+stay excluded. Provider/session guarantees, tax/rounding rules, retention,
+invitation/recovery operations and deployment approval remain release gates.
+No acceptance case here has been executed during this documentation update.
 
 ## F. Separately approved hosted tests and release gates
 
