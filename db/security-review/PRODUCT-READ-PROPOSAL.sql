@@ -775,19 +775,21 @@ BEGIN
       'category', p.category,
       'unit_code', p.unit_code,
       'is_active', p.is_active,
-      'stock_quantity', b.quantity
+       -- BIGINT counts and NUMERIC amounts are emitted as text so JavaScript
+       -- clients cannot silently round values outside its exact integer range.
+       'stock_quantity', b.quantity::text
     )
     ||
     CASE
       WHEN v_role IN ('Owner','Admin') THEN pg_catalog.jsonb_build_object(
-        'selling_price', p.selling_price,
-        'cost_price', p.unit_cost,
-        'low_stock_threshold', p.low_stock_threshold,
+        'selling_price', p.selling_price::text,
+        'cost_price', p.unit_cost::text,
+        'low_stock_threshold', p.low_stock_threshold::text,
         'classification_code', p.classification_code
       )
       WHEN v_role = 'Staff' THEN pg_catalog.jsonb_build_object(
-        'selling_price', p.selling_price,
-        'low_stock_threshold', p.low_stock_threshold
+        'selling_price', p.selling_price::text,
+        'low_stock_threshold', p.low_stock_threshold::text
       )
       ELSE '{}'::jsonb
     END

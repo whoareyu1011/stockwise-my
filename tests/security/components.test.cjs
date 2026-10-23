@@ -45,29 +45,6 @@ function productRow(overrides = {}) {
   };
 }
 
-class MockIdempotencyStore {
-  #entries = new Map();
-
-  async run({ scope, key, requestHash, operation }) {
-    const id = `${scope.companyId}:${scope.identityId}:${scope.action}:${key}`;
-    const existing = this.#entries.get(id);
-    if (existing) {
-      if (existing.requestHash !== requestHash) {
-        throw new SecurityError("IDEMPOTENCY_CONFLICT");
-      }
-      return existing.promise;
-    }
-    const entry = { requestHash, promise: Promise.resolve().then(operation) };
-    this.#entries.set(id, entry);
-    try {
-      return await entry.promise;
-    } catch (error) {
-      if (this.#entries.get(id) === entry) this.#entries.delete(id);
-      throw error;
-    }
-  }
-}
-
 async function createService(role = "Staff", {
   memberCompanyId = fixtures.A,
   repositoryOverrides = {},
@@ -82,6 +59,27 @@ async function createService(role = "Staff", {
     clock: () => fixtures.NOW,
   });
   const calls = [];
+  const effects = [];
+  const idempotency = new Map();
+  async function atomic(method, args, operation) {
+    calls.push([method, args]);
+    const { idempotencyKey, ...payload } = args;
+    const identity = `${args.companyId}:${method}:${idempotencyKey}`;
+    const request = JSON.stringify(payload);
+    const prior = idempotency.get(identity);
+    if (prior) {
+      if (prior.request !== request) throw new SecurityError("IDEMPOTENCY_CONFLICT");
+      return prior.promise;
+    }
+    const entry = { request, promise: Promise.resolve().then(operation) };
+    idempotency.set(identity, entry);
+    try {
+      return await entry.promise;
+    } catch (error) {
+      if (idempotency.get(identity) === entry) idempotency.delete(identity);
+      throw error;
+    }
+  }
   const repository = {
     async listProducts(args) {
       calls.push(["listProducts", args]);
@@ -92,29 +90,36 @@ async function createService(role = "Staff", {
       return productRow({ id: args.productId });
     },
     async createProduct(args) {
-      calls.push(["createProduct", args]);
-      return productRow({ ...args.product });
+      return atomic("createProduct", args, async () => {
+        effects.push(["createProduct", args]);
+        return productRow({ ...args.product });
+      });
     },
     async updateProduct(args) {
-      calls.push(["updateProduct", args]);
-      return productRow({ ...args.changes });
+      return atomic("updateProduct", args, async () => {
+        effects.push(["updateProduct", args]);
+        return productRow({ ...args.changes });
+      });
     },
     async archiveProduct(args) {
-      calls.push(["archiveProduct", args]);
-      return { id: args.productId, is_active: false };
+      return atomic("archiveProduct", args, async () => {
+        effects.push(["archiveProduct", args]);
+        return { id: args.productId, is_active: false };
+      });
     },
     async adjustStock(args) {
-      calls.push(["adjustStock", args]);
-      return { movementId: fixtures.ORDER, balanceBefore: 8, balanceAfter: 10 };
+      return atomic("adjustStock", args, async () => {
+        effects.push(["adjustStock", args]);
+        return { movementId: fixtures.ORDER, balanceBefore: 8, balanceAfter: 10 };
+      });
     },
     ...repositoryOverrides,
   };
   const service = createProductInventoryService({
     authorize,
     repository,
-    idempotencyStore: new MockIdempotencyStore(),
   });
-  return { service, principal, session, calls, repository, authorize };
+  return { service, principal, session, calls, effects, repository, authorize };
 }
 
 test("remote Supabase JWKS is pinned to validated startup configuration and uses jose lazily", async () => {
@@ -352,7 +357,7 @@ test("product create/update/archive require Owner or Admin and reject forged sco
     assert.equal(result.sku, validProduct.sku);
     assert.equal(Object.hasOwn(result, "unexpected_private_field"), false);
     assert.equal(calls[0][1].companyId, fixtures.A);
-    assert.equal(calls[0][1].actorIdentityId, fixtures.IDENTITY);
+    assert.equal(calls[0][1].actorIdentityId, undefined);
   });
   await t.test("Admin can edit; caller cannot change company or role", async () => {
     const { service, principal, session, calls } = await createService("Admin");
@@ -400,18 +405,17 @@ test("product validation rejects unsafe monetary formats and caller-controlled i
   assert.equal(calls.length, 0);
 });
 
-test("product creation idempotency replays the same result, rejects key reuse, and coalesces retries", async () => {
-  const { service, principal, session, calls } = await createService("Owner");
+test("product creation sends stable idempotency keys for database-owned replay and conflict handling", async () => {
+  const { service, principal, session, calls, effects } = await createService("Owner");
   const input = {
     principal, session, companyId: fixtures.A, idempotencyKey: "product-create-retry-1",
     product: { sku: "retry", name: "Retry item" },
   };
-  const [first, second] = await Promise.all([
-    service.createProduct(input),
-    service.createProduct(input),
-  ]);
+  const first = await service.createProduct(input);
+  const second = await service.createProduct(input);
   assert.deepEqual(first, second);
-  assert.equal(calls.filter(([method]) => method === "createProduct").length, 1);
+  assert.equal(calls.filter(([method]) => method === "createProduct").length, 2);
+  assert.equal(effects.filter(([method]) => method === "createProduct").length, 1);
   await rejectsCode(() => service.createProduct({
     ...input,
     product: { sku: "different", name: "Different payload" },
@@ -436,7 +440,7 @@ test("stock adjustment is Owner/Admin-only, validated, audited-attributed and id
       balanceAfter: 10,
     });
     assert.equal(calls[0][0], "adjustStock");
-    assert.equal(calls[0][1].actorIdentityId, fixtures.IDENTITY);
+    assert.equal(calls[0][1].actorIdentityId, undefined);
     assert.equal(calls[0][1].companyId, fixtures.A);
   });
   await t.test("Admin may adjust; Staff and Viewer may not", async () => {
@@ -453,7 +457,7 @@ test("stock adjustment is Owner/Admin-only, validated, audited-attributed and id
     }
   });
   await t.test("invalid or non-idempotent adjustments fail before repository writes", async () => {
-    const { service, principal, session, calls } = await createService("Owner");
+    const { service, principal, session, calls, effects } = await createService("Owner");
     await rejectsCode(() => service.adjustStock({
       principal, session, ...request, quantity: -1,
     }), "REQUEST_INVALID");
@@ -468,7 +472,8 @@ test("stock adjustment is Owner/Admin-only, validated, audited-attributed and id
     const first = await service.adjustStock(input);
     const retry = await service.adjustStock(input);
     assert.deepEqual(retry, first);
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 3);
+    assert.equal(effects.length, 1);
     await rejectsCode(() => service.adjustStock({
       ...input,
       quantity: request.quantity + 1,

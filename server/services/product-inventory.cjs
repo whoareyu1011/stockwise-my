@@ -1,6 +1,5 @@
 "use strict";
 
-const { createHash } = require("node:crypto");
 const { SecurityError } = require("../security/errors.cjs");
 const { isAuthorizedContext } = require("../security/authorize.cjs");
 const { isUuid } = require("../security/verify-token.cjs");
@@ -83,22 +82,21 @@ function productProjection(row, role) {
   if (!plainObject(row) || !CODES.has(role)) dependencyUnavailable();
   const result = {};
   for (const field of ROLE_FIELDS[role]) {
-    if (Object.hasOwn(row, field)) result[field] = row[field];
+    if (!Object.hasOwn(row, field)) continue;
+    const value = row[field];
+    if (["selling_price", "cost_price"].includes(field) &&
+        (typeof value !== "string" ||
+         !/^(?:0|[1-9][0-9]{0,13})(?:\.[0-9]{1,6})?$/.test(value))) {
+      dependencyUnavailable();
+    }
+    if (["low_stock_threshold", "stock_quantity"].includes(field) &&
+        !((typeof value === "string" && /^(?:0|[1-9][0-9]*)$/.test(value)) ||
+          (Number.isSafeInteger(value) && value >= 0))) {
+      dependencyUnavailable();
+    }
+    result[field] = value;
   }
   return Object.freeze(result);
-}
-
-function canonical(value) {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (plainObject(value)) {
-    return `{${Object.keys(value).sort().map(key =>
-      `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function requestHash(value) {
-  return createHash("sha256").update(canonical(value)).digest("hex");
 }
 
 function validateIdempotencyKey(value) {
@@ -114,9 +112,8 @@ function validateServiceInput(input) {
   if (!plainObject(input)) invalid();
 }
 
-function createProductInventoryService({ authorize, repository, idempotencyStore } = {}) {
-  if (typeof authorize !== "function" || !repository ||
-      !idempotencyStore || typeof idempotencyStore.run !== "function") {
+function createProductInventoryService({ authorize, repository } = {}) {
+  if (typeof authorize !== "function" || !repository) {
     throw new SecurityError("SECURITY_CONFIGURATION");
   }
 
@@ -147,26 +144,6 @@ function createProductInventoryService({ authorize, repository, idempotencyStore
     if (typeof repository[method] !== "function") dependencyUnavailable();
     try {
       return await repository[method](Object.freeze(args));
-    } catch (error) {
-      if (error instanceof SecurityError) throw error;
-      throw new SecurityError("DATABASE_UNAVAILABLE");
-    }
-  }
-
-  async function idempotent(context, action, keyValue, payload, operation) {
-    const key = validateIdempotencyKey(keyValue);
-    const scope = Object.freeze({
-      companyId: context.companyId,
-      identityId: context.identityId,
-      action,
-    });
-    try {
-      return await idempotencyStore.run({
-        scope,
-        key,
-        requestHash: requestHash(payload),
-        operation,
-      });
     } catch (error) {
       if (error instanceof SecurityError) throw error;
       throw new SecurityError("DATABASE_UNAVAILABLE");
@@ -213,48 +190,43 @@ function createProductInventoryService({ authorize, repository, idempotencyStore
     async createProduct(input) {
       validateServiceInput(input);
       const product = productInput(input.product);
+      const idempotencyKey = validateIdempotencyKey(input.idempotencyKey);
       const context = await authorized(input, "product.write");
-      const payload = { companyId: context.companyId, product };
-      return idempotent(context, "product.create", input.idempotencyKey, payload,
-        async () => productProjection(await callRepository("createProduct", {
-          companyId: context.companyId,
-          actorIdentityId: context.identityId,
-          product,
-        }), context.role));
+      return productProjection(await callRepository("createProduct", {
+        companyId: context.companyId,
+        idempotencyKey,
+        product,
+      }), context.role);
     },
 
     async updateProduct(input) {
       validateServiceInput(input);
       if (!isUuid(input.productId)) invalid();
       const changes = productInput(input.changes, { partial: true });
+      const idempotencyKey = validateIdempotencyKey(input.idempotencyKey);
       const context = await authorized(input, "product.write", input.productId);
-      const payload = { companyId: context.companyId, productId: input.productId, changes };
-      return idempotent(context, "product.update", input.idempotencyKey, payload,
-        async () => productProjection(await callRepository("updateProduct", {
-          companyId: context.companyId,
-          productId: input.productId,
-          actorIdentityId: context.identityId,
-          changes,
-        }), context.role));
+      return productProjection(await callRepository("updateProduct", {
+        companyId: context.companyId,
+        productId: input.productId,
+        idempotencyKey,
+        changes,
+      }), context.role);
     },
 
     async archiveProduct(input) {
       validateServiceInput(input);
       if (!isUuid(input.productId)) invalid();
+      const idempotencyKey = validateIdempotencyKey(input.idempotencyKey);
       const context = await authorized(input, "product.write", input.productId);
-      const payload = { companyId: context.companyId, productId: input.productId };
-      return idempotent(context, "product.archive", input.idempotencyKey, payload,
-        async () => {
-          const result = await callRepository("archiveProduct", {
-            companyId: context.companyId,
-            productId: input.productId,
-            actorIdentityId: context.identityId,
-          });
-          if (!plainObject(result) || result.id !== input.productId || result.is_active !== false) {
-            dependencyUnavailable();
-          }
-          return Object.freeze({ id: result.id, is_active: false });
-        });
+      const result = await callRepository("archiveProduct", {
+        companyId: context.companyId,
+        productId: input.productId,
+        idempotencyKey,
+      });
+      if (!plainObject(result) || result.id !== input.productId || result.is_active !== false) {
+        dependencyUnavailable();
+      }
+      return Object.freeze({ id: result.id, is_active: false });
     },
 
     async adjustStock(input) {
@@ -264,30 +236,25 @@ function createProductInventoryService({ authorize, repository, idempotencyStore
           !Number.isSafeInteger(input.quantity) || input.quantity < 1 ||
           input.quantity > 1000000000) invalid();
       const reason = text(input.reason, { min: 3, max: 300 });
+      const idempotencyKey = validateIdempotencyKey(input.idempotencyKey);
       const context = await authorized(input, "stock.adjust", input.productId);
-      const payload = {
+      const result = await callRepository("adjustStock", {
         companyId: context.companyId,
         productId: input.productId,
         direction: input.direction,
         quantity: input.quantity,
         reason,
-      };
-      return idempotent(context, "stock.adjust", input.idempotencyKey, payload,
-        async () => {
-          const result = await callRepository("adjustStock", {
-            ...payload,
-            actorIdentityId: context.identityId,
-          });
-          if (!plainObject(result) || typeof result.movementId !== "string" ||
-              !isUuid(result.movementId) ||
-              !Number.isSafeInteger(result.balanceBefore) ||
-              !Number.isSafeInteger(result.balanceAfter)) dependencyUnavailable();
-          return Object.freeze({
-            movementId: result.movementId,
-            balanceBefore: result.balanceBefore,
-            balanceAfter: result.balanceAfter,
-          });
-        });
+        idempotencyKey,
+      });
+      if (!plainObject(result) || typeof result.movementId !== "string" ||
+          !isUuid(result.movementId) ||
+          !Number.isSafeInteger(result.balanceBefore) ||
+          !Number.isSafeInteger(result.balanceAfter)) dependencyUnavailable();
+      return Object.freeze({
+        movementId: result.movementId,
+        balanceBefore: result.balanceBefore,
+        balanceAfter: result.balanceAfter,
+      });
     },
   });
 }
@@ -298,14 +265,12 @@ function createProductInventoryService({ authorize, repository, idempotencyStore
 // - adjustStock must append a ledger movement, update the trigger-maintained
 //   balance, and append an actor-attributed audit entry in one DB transaction;
 //   it must lock/check the balance so concurrent operations cannot oversell.
-// - idempotencyStore.run must atomically persist the result with the mutation,
-//   replay the same key+hash, and reject same-key/different-hash requests across
-//   processes and restarts. The test implementation is only an in-memory mock.
+// - Every write is exactly one database RPC. The database, not an in-memory
+//   process cache, owns atomic idempotency and persists the original result.
 
 module.exports = {
   createProductInventoryService,
   productInput,
   productProjection,
-  requestHash,
   validateIdempotencyKey,
 };
