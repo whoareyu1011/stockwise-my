@@ -14,7 +14,7 @@ the SQL or that the proposed checks pass in Supabase.
 | 3 | Membership-owner RLS bypass and administration | Membership operations are not exposed through the API and are explicitly blocked until an approved audit control or independently verified privileged operational procedure exists. | The block is a process requirement, not a database-enforced audit trail. A trusted operator/migrator can still change or delete rows; no membership write or first-Owner procedure is approved here. |
 | 4 | Permissive RLS policy composition | Each protected table gets a permissive reader policy plus a restrictive company-membership guard. Both the RPC and policies call the same active-membership helper and the RPC rejects roles outside Owner/Admin/Staff/Viewer. | Company checks are repeated at separate call sites but share one trust point; they are not independent implementations. Later policy/DDL changes could still remove or alter the restrictive guard. |
 | 5 | Existing ACL drift | The product proposal checks current effective privileges and fails closed before the DDL instead of broadly revoking unknown grants from existing `stockwise` objects. New schemas receive explicit revocations; postflight verifies the intended API surface. | Addressed in source. The effective ACL catalog checks have not been run, and unmodeled managed objects/privileges may require revision. |
-| 6 | Owner default function privileges | The product proposal requires the existing owner-default hardening prerequisite and rejects PUBLIC or named-role function EXECUTE defaults. Function grants use the exact RPC signature; postflight checks owners, `SECURITY DEFINER`, and fixed `search_path`. | Addressed in source. The prerequisite's actual application and the resulting defaults are unknown until inspected in the intended database. |
+| 6 | Owner default function privileges | The product proposal requires explicit global function-default hardening for all three function-owner roles, rejects PUBLIC or named-role EXECUTE defaults, grants by exact signatures, and postflights owners, `SECURITY DEFINER`, fixed `search_path`, and PUBLIC ACLs. | Addressed in source. The prerequisite's actual application and resulting defaults/ACLs are unknown until inspected in the intended database. |
 | 7 | Provisioning roles and Supabase prerequisites | Added a separate review-only SQL proposal for `stockwise_auth_owner` and `stockwise_product_reader`, including restricted role attributes, SET-only migrator memberships, and narrowly described grants. | Addressed as a proposal only. PostgreSQL version, role-creation behavior, Auth schema ACLs, and grant authority must be verified on the intended target. |
 | 8 | Unexpected membership roles | The RPC rejects null or unexpected membership roles before returning rows; the authorization branch no longer treats unknown roles as Viewer. | Addressed in source. Database execution and negative tests remain outstanding. |
 
@@ -22,13 +22,15 @@ the SQL or that the proposed checks pass in Supabase.
 
 | Finding | Source location | Correction/status |
 | --- | --- | --- |
-| Required database/schema authority was not explicit | `PRODUCT-READ-PROPOSAL.sql` preflight and `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql` preflight/postflight | Added fail-closed checks for target-database CREATE on `stockwise_migrator` and grant authority for `stockwise` schema USAGE. These do not grant privileges. The target values remain unknown. |
-| Role-attribute checks omitted REPLICATION/API administration flags | Both SQL proposals' preflight/postflight role checks | Added REPLICATION checks for StockWise roles and rejected SUPERUSER, CREATEROLE, CREATEDB, and REPLICATION on the standard API roles. `service_role` may retain BYPASSRLS; `anon`, `authenticated`, and `authenticator` may not. Not executed. |
-| RPC/RLS use one shared membership helper | Product proposal helper, RPC, and restrictive policies; this document's trust-point explanation | Corrected the description: multiple enforcement call sites share one authorization trust point. Focused independent review and negative tests remain required. |
-| Membership lifecycle lacked a database audit control | Product proposal and role-provisioning comments; membership table | Explicitly blocks membership creation, role changes, deactivation, deletion, and first-Owner provisioning until an approved audit control or independently verified privileged process exists. There is no membership-write endpoint. Privileged operators can still mutate the table; the block is operational, not enforced by this SQL. |
-| Privileged operator/migrator path | Both proposals' trust-boundary comments | Explicitly states that trusted provisioning/migration operators can exercise privileged access outside the product RPC. No claim is made that the RPC technically prevents that access. |
-| Actual Data API exposure and callable roles were not established | Both proposal headers; target prerequisites below | Requires independent target evidence for exposed schemas, callable roles, membership closure, and effective grants. The Dashboard configuration is not inspectable by these SQL files. |
-| PostgreSQL/Auth/Data API behavior remains unverified | Both proposals' version/Auth preflights and this document's target checklist | Version, Supabase Auth grants/identity propagation, catalog behavior, and Data API behavior remain assumptions until verified in an approved isolated or hosted target. |
+| Required database/schema authority was not explicit | `PRODUCT-READ-PROPOSAL.sql:128–135, 175–185, 710–725`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:118–128, 165–175, 201–208, 258–291` | Added fail-closed checks for target-database CREATE on `stockwise_migrator`, absence of that privilege on protected/API roles, and grant authority for `stockwise` schema USAGE. These do not grant privileges. Target values remain unknown. |
+| Role-attribute checks omitted REPLICATION/API administration flags | `PRODUCT-READ-PROPOSAL.sql:142–174, 685–708`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:108–113, 184–208, 249–276` | Added REPLICATION checks for StockWise roles and rejected SUPERUSER, CREATEROLE, CREATEDB, and REPLICATION on standard API roles. `service_role` may retain BYPASSRLS; `anon`, `authenticated`, and `authenticator` may not. `authenticator` may be LOGIN; the other three API roles may not. Not executed. |
+| RPC/RLS use one shared membership helper | `PRODUCT-READ-PROPOSAL.sql:527–550, 565–584, 619`; `PRODUCT-READ-REVIEW.md:61–64` | Corrected the description: multiple enforcement call sites share one authorization trust point. Focused review and negative tests remain required. |
+| Membership lifecycle lacked a database audit control | `PRODUCT-READ-PROPOSAL.sql:45–49, 507–525`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:31–34`; `PRODUCT-READ-REVIEW.md:103–117` | Explicitly blocks membership creation, role changes, deactivation, deletion, and first-Owner provisioning until an approved audit control or independently verified privileged process exists. There is no membership-write endpoint. Privileged operators can still mutate the table; the block is operational, not enforced by this SQL. |
+| Privileged operator/migrator path | `PRODUCT-READ-PROPOSAL.sql:18–33, 136–139, 248–268, 674–678`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:12–34, 219–221` | Explicitly states that trusted provisioning/migration operators can exercise privileged access outside the product RPC. No claim is made that the RPC technically prevents that access. |
+| Actual Data API exposure and callable roles were not established | `PRODUCT-READ-PROPOSAL.sql:39–43`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:35–37`; `PRODUCT-READ-REVIEW.md:108–115` | Requires independent target evidence for exposed schemas, callable roles, membership closure, and effective grants. The Dashboard configuration is not inspectable by these SQL files. |
+| PostgreSQL/Auth/Data API behavior remains unverified | `PRODUCT-READ-PROPOSAL.sql:51–54, 67–77`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:60–62, 84–100`; `PRODUCT-READ-REVIEW.md:87–119` | Version, Supabase Auth grants/identity propagation, catalog behavior, and Data API behavior remain assumptions until verified in an approved isolated or hosted target. |
+| Explicit global function-default hardening must cover each function owner | `PRODUCT-READ-PROPOSAL.sql:333–366`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:532–562` | The product preflight now requires explicit hardening for the existing owner and both new function owners; the provisioning postflight checks the new owners. Effective target ACLs remain unverified. |
+| Helper overload and PUBLIC EXECUTE checks were incomplete | `PRODUCT-READ-PROPOSAL.sql:863–924` | Added an exact one-function count and signature-resolution check for the private membership helper, and a catalog ACL check rejecting PUBLIC EXECUTE on either security function. Effective named-role access checks remain in place. Not executed. |
 
 ## Source files
 
@@ -49,10 +51,13 @@ configuration, and secrets were not changed for this correction.
 Static review of the proposal source confirmed:
 
 - The product RPC has one explicit four-argument signature and is granted to
-  `authenticated` by that exact signature.
+  `authenticated` by that exact signature. The private helper is also checked
+  for exactly one function/signature; the postflight rejects PUBLIC EXECUTE on
+  either security function.
 - The proposals now check database CREATE on the migrator, schema-USAGE grant
   authority for `stockwise_owner`, the required grant path for Auth references,
-  and relevant owner/migrator/API role attributes including REPLICATION.
+  explicit global function-default hardening for each function owner, and
+  relevant owner/migrator/API role attributes including REPLICATION.
 - `service_role` is the documented BYPASSRLS exception; it remains denied the
   proposed API/private schemas and RPC. `authenticator` may be LOGIN as the
   Data API connection role.
@@ -144,8 +149,8 @@ all cases below are **NOT RUN**:
   added, and confirm the RPC and RLS call the shared authorization helper with
   the intended identity/company scope.
 - Verify SECURITY DEFINER owners, exact signatures/no overloads, `search_path`,
-  owner function defaults, effective ACLs, and rollback on every failed
-  preflight/postflight.
+  owner function defaults, effective ACLs (including PUBLIC), and rollback on
+  every failed preflight/postflight.
 - Confirm trusted migration/provisioning access is isolated from request
   handling; test that ordinary API roles cannot assume deployment or owner roles.
 - Confirm the target's Auth function ACLs and `auth.uid()` identity behavior.
@@ -154,3 +159,12 @@ all cases below are **NOT RUN**:
 
 These are proposed cases, not executable results. A passing local test would
 not establish Dashboard Data API exposure settings or hosted Supabase behavior.
+
+## Decision
+
+**READY FOR A FURTHER INDEPENDENT SOURCE REVIEW ONLY.** The changes above are
+source and documentation corrections; this is not approval to execute either
+SQL proposal. Database setup, migration execution, deployment, business-data
+access, and endpoint implementation remain blocked pending target-specific
+prerequisites, an approved membership-audit/Owner-provisioning process, and
+independent review of the SQL and Supabase configuration.

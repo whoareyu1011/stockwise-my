@@ -35,7 +35,9 @@
 --     Supabase service_role may retain its managed BYPASSRLS attribute, but is
 --     denied the proposed schemas and function; other API roles must not bypass RLS.
 --     authenticator may be LOGIN as the Data API connection role.
---   * Only stockwise_api is configured as an exposed Supabase Data API schema.
+--     anon, authenticated, and service_role must be NOLOGIN.
+--   * Require Dashboard configuration to expose only stockwise_api; this is
+--     not verifiable from this SQL session and remains an unverified prerequisite.
 --   * Independently enumerate every exposed Data API schema, callable role,
 --     role-membership path, and effective grant. The Dashboard configuration
 --     and custom claimable roles cannot be proven from this SQL session alone.
@@ -157,7 +159,9 @@ BEGIN
     SELECT 1 FROM pg_catalog.pg_roles AS api
     WHERE api.rolname IN ('anon','authenticated','service_role','authenticator')
       AND (api.rolsuper OR api.rolcreaterole OR api.rolcreatedb
-           OR api.rolreplication)
+           OR api.rolreplication
+           OR (api.rolname IN ('anon','authenticated','service_role')
+               AND api.rolcanlogin))
   ) THEN
     RAISE EXCEPTION 'A Supabase API role has an unapproved administrative attribute';
   END IF;
@@ -328,14 +332,22 @@ BEGIN
 
   -- Require the owner-default hardening from deployment step 03. Reject
   -- PUBLIC or named-role EXECUTE defaults; do not silently repair ACL drift.
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_default_acl AS d
-    WHERE d.defaclrole = pg_catalog.to_regrole('stockwise_owner')
-      AND d.defaclnamespace = 0
-      AND d.defaclobjtype = 'f'
+  IF EXISTS (
+    SELECT required.role_oid
+    FROM (VALUES
+      (pg_catalog.to_regrole('stockwise_owner')),
+      (pg_catalog.to_regrole('stockwise_auth_owner')),
+      (pg_catalog.to_regrole('stockwise_product_reader'))
+    ) AS required(role_oid)
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_default_acl AS d
+      WHERE d.defaclrole = required.role_oid
+        AND d.defaclnamespace = 0
+        AND d.defaclobjtype = 'f'
+    )
   ) THEN
-    RAISE EXCEPTION 'Owner global function defaults are not explicitly hardened';
+    RAISE EXCEPTION 'StockWise function-owner roles lack explicit global function-default hardening';
   END IF;
   IF EXISTS (
     SELECT 1
@@ -685,7 +697,9 @@ BEGIN
     SELECT 1 FROM pg_catalog.pg_roles AS api
     WHERE api.rolname IN ('anon','authenticated','service_role','authenticator')
       AND (api.rolsuper OR api.rolcreaterole OR api.rolcreatedb
-           OR api.rolreplication)
+           OR api.rolreplication
+           OR (api.rolname IN ('anon','authenticated','service_role')
+               AND api.rolcanlogin))
   ) OR EXISTS (
     SELECT 1 FROM pg_catalog.pg_roles AS api
     WHERE api.rolname IN ('anon','authenticated','authenticator')
@@ -856,6 +870,16 @@ BEGIN
     RAISE EXCEPTION 'The product RPC is missing, duplicated, or has an unexpected overload';
   END IF;
 
+  IF (
+    SELECT count(*)
+    FROM pg_catalog.pg_proc AS p
+    JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'stockwise_private'
+  ) <> 1 OR pg_catalog.to_regprocedure(
+       'stockwise_private.current_company_role(uuid)') IS NULL THEN
+    RAISE EXCEPTION 'The membership helper is missing, duplicated, or has an unexpected overload';
+  END IF;
+
   SELECT p.proowner, p.prosecdef, p.proconfig
   INTO v_proc
   FROM pg_catalog.pg_proc AS p
@@ -880,6 +904,23 @@ BEGIN
        'search_path=pg_catalog, pg_temp' = ANY(v_proc.proconfig), false
      ) THEN
     RAISE EXCEPTION 'Membership helper owner, SECURITY DEFINER status, or fixed search_path differs';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_proc AS p
+    CROSS JOIN LATERAL pg_catalog.aclexplode(
+      COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))
+    ) AS acl
+    WHERE p.oid IN (
+      pg_catalog.to_regprocedure(
+        'stockwise_api.list_products(uuid,integer,text,uuid)'),
+      pg_catalog.to_regprocedure(
+        'stockwise_private.current_company_role(uuid)')
+    )
+      AND acl.grantee = 0
+      AND acl.privilege_type = 'EXECUTE'
+  ) THEN
+    RAISE EXCEPTION 'PUBLIC has EXECUTE on a proposed security function';
   END IF;
 
   IF NOT EXISTS (

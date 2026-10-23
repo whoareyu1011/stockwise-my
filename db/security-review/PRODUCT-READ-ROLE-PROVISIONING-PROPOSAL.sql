@@ -288,7 +288,7 @@ BEGIN
       AND pg_catalog.has_database_privilege(
         api.oid,pg_catalog.current_database(),'CREATE')
   ) THEN
-    RAISE EXCEPTION 'Postflight found target-database CREATE outside the migrator';
+    RAISE EXCEPTION 'Postflight found target-database CREATE on an owner or API role';
   END IF;
 
   IF NOT pg_catalog.pg_has_role(
