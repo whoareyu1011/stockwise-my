@@ -1,1 +1,1 @@
-- [Approved security planning decisions](security-planning-decisions.md) — Supabase Auth, narrower Viewer scope and protected onboarding; approval covers planning only.
+- [StockWise authorization decisions](security-planning-decisions.md) — Supabase Auth, role boundaries, Viewer limits, and approved product-read fields; deployment remains unapproved.

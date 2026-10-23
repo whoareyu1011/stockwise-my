@@ -23,8 +23,16 @@ The user approved these design decisions for planning:
 - Company creation and first-owner onboarding: trusted backend workflow with an invitation process.
 - Administrative database credentials must be separated from business-runtime credentials.
 - Every business operation must enforce company-level authorization.
+- For the first product-read contract, basic fields are `id`, `sku`, `name`,
+  `category`, `unit_code`, and `is_active`. Owner/Admin may also receive selling
+  price, cost price, stock quantity, low-stock threshold, and classification
+  code. Staff may receive selling price, stock quantity, and low-stock threshold,
+  but no cost or classification code. Viewer receives only basic fields and
+  stock quantity. Unapproved fields are omitted by default.
 
-Approval covers planning only, not implementation or deployment.
+The product-field contract is approved for the proposed read-only endpoint.
+Implementation, database changes, hosted configuration, and deployment still
+require separate approval.
 
 Staff cannot post, adjust stock, reverse orders, manage members or export
 company data unless a separately approved exception is documented. Operator is
