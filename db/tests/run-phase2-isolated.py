@@ -16,16 +16,71 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import uuid
 
 REPO = Path(__file__).resolve().parents[2]
+REVIEWED_SOURCES = [
+    "db/deployment/01_create_roles.sql",
+    "db/deployment/02_grant_migration_access.sql",
+    "db/deployment/03_harden_owner_function_defaults.sql",
+    "db/migrations/0001_inventory.sql",
+    "db/security-review/phase2/01_identity.sql",
+    "db/security-review/phase2/02_policies_commands.sql",
+    "db/security-review/phase2/03_adapter_contract.sql",
+    "db/tests/prerequisites.local.cjs",
+    "db/tests/inventory.local.cjs",
+    "db/tests/runtime-security.local.cjs",
+    "db/tests/run-phase2-isolated.py",
+    "db/tests/phase2/common.cjs",
+    "db/tests/phase2/fixtures.cjs",
+    "db/tests/phase2/inventory-cases.cjs",
+    "db/tests/phase2/inventory-concurrency.cjs",
+    "db/tests/phase2/postgres-adapter.cjs",
+    "server/security/authorize.cjs",
+    "server/security/config.cjs",
+    "server/security/errors.cjs",
+    "server/security/permissions.cjs",
+    "server/security/pools.cjs",
+    "server/security/session-status.cjs",
+    "server/security/transaction.cjs",
+    "server/security/verify-token.cjs",
+    "tests/security/fixtures.cjs",
+    "tests/security/security.test.cjs",
+]
+
+
+def verify_reviewed_sources():
+    manifest_path = REPO / "db/security-review/phase2/reviewed-source-sha256.json"
+    manifest = json.loads(manifest_path.read_text())
+    sources = manifest.get("sources")
+    if manifest.get("version") != 1 or manifest.get("algorithm") != "SHA-256":
+        raise RuntimeError("Reviewed-source manifest version/algorithm mismatch")
+    if not isinstance(sources, dict) or sorted(sources) != sorted(REVIEWED_SOURCES):
+        raise RuntimeError("Reviewed-source manifest path set mismatch")
+    for relative in REVIEWED_SOURCES:
+        target = (REPO / relative).resolve(strict=True)
+        if not target.is_relative_to(REPO):
+            raise RuntimeError(f"Reviewed source escapes repository: {relative}")
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        if digest != sources[relative]:
+            raise RuntimeError(f"Reviewed source hash mismatch: {relative}")
+    return hashlib.sha256(manifest_path.read_bytes()).hexdigest()
 
 
 def isolate_network():
-    # Drop inherited non-stdio descriptors, including pre-opened network sockets.
-    for item in Path("/proc/self/fd").iterdir():
-        fd = int(item.name)
+    # Snapshot descriptor numbers before closing anything: mutating /proc/self/fd
+    # while iterating can skip descriptors. Standard descriptors must not be
+    # pre-opened sockets either.
+    descriptors = sorted(int(name) for name in os.listdir("/proc/self/fd") if name.isdigit())
+    for fd in (0, 1, 2):
+        try:
+            if stat.S_ISSOCK(os.fstat(fd).st_mode):
+                raise RuntimeError("Inherited socket on standard descriptor; refusing isolation")
+        except OSError as exc:
+            raise RuntimeError("Standard descriptor identity could not be verified") from exc
+    for fd in descriptors:
         if fd > 2:
             try:
                 os.close(fd)
@@ -75,18 +130,53 @@ def isolate_network():
         raise RuntimeError("Network isolation self-check failed")
 
 
-def processes_for(data):
-    matches = []
+def process_snapshot(entry):
+    try:
+        args = (entry / "cmdline").read_bytes().split(b"\0")
+        cwd = Path(os.readlink(entry / "cwd")).resolve()
+        exe = Path(os.readlink(entry / "exe")).name
+        stat_line = (entry / "stat").read_text()
+        fields = stat_line[stat_line.rfind(")") + 1:].split()
+        return {"pid": int(entry.name), "ppid": int(fields[1]), "args": args, "cwd": cwd, "exe": exe}
+    except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError, IndexError, OSError):
+        return None
+
+
+def processes_for(data, root_pid=None):
+    data = Path(data).resolve()
+    snapshots = {}
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
-        try:
-            args = (entry / "cmdline").read_bytes().split(b"\0")
-            if os.fsencode(data) in args:
-                matches.append(int(entry.name))
-        except (FileNotFoundError, PermissionError, ProcessLookupError):
-            continue
-    return matches
+        info = process_snapshot(entry)
+        if info:
+            snapshots[info["pid"]] = info
+    matches = set()
+    for pid, info in snapshots.items():
+        cwd_inside = info["cwd"] == data or data in info["cwd"].parents
+        command_inside = os.fsencode(str(data)) in b"\0".join(info["args"])
+        if cwd_inside or command_inside:
+            matches.add(pid)
+    # Include descendants even if a child changes its working directory.
+    changed = True
+    while changed:
+        changed = False
+        for pid, info in snapshots.items():
+            if info["ppid"] in matches and pid not in matches:
+                matches.add(pid)
+                changed = True
+    if root_pid is not None and root_pid in snapshots:
+        matches.add(root_pid)
+    return sorted(matches)
+
+
+def verified_postmaster(data, pid):
+    info = process_snapshot(Path("/proc") / str(pid))
+    if not info or info["exe"] != "postgres":
+        return False
+    base = Path(data).resolve()
+    return (info["cwd"] == base or base in info["cwd"].parents
+            or os.fsencode(str(base)) in b"\0".join(info["args"]))
 
 
 def safe_message(value):
@@ -101,6 +191,16 @@ def main():
     parser.add_argument("--approved-local-execution", action="store_true")
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
+    try:
+        manifest_hash = verify_reviewed_sources()
+    except Exception as exc:
+        parser.error(f"Reviewed-source verification failed: {type(exc).__name__}")
+    # AF_UNIX remains allowed for the private PostgreSQL socket, but that also
+    # permits connections to local brokers/proxies. This launcher cannot prove
+    # that arbitrary filesystem socket access is isolated from host services.
+    # Do not remove this block until a separately approved OS network namespace
+    # or equivalent confinement has been implemented and reviewed.
+    parser.error("BLOCKED: AF_UNIX host-service isolation cannot be proven by this launcher")
     if not args.approved_local_execution:
         parser.error("Preparation only. Separate human approval is required before execution.")
     def interrupt(signum, frame):
@@ -132,16 +232,8 @@ def main():
     attempted_start = False
     record = {"suite": args.suite, "status": "FAIL", "results": [], "cleanup": "NOT_ATTEMPTED",
               "scope": "disposable-local-only; synthetic fixtures; no hosted authentication",
-              "migration_sha256": hashlib.sha256((REPO / "db/migrations/0001_inventory.sql").read_bytes()).hexdigest()}
-    review_sources = [
-        *sorted((REPO / "db/security-review/phase2").glob("*.sql")),
-        *sorted((REPO / "db/tests/phase2").glob("*.cjs")),
-        REPO / "db/tests/inventory.local.cjs", REPO / "db/tests/runtime-security.local.cjs",
-        Path(__file__).resolve(),
-    ]
-    record["review_source_sha256"] = {
-        str(p.relative_to(REPO)): hashlib.sha256(p.read_bytes()).hexdigest() for p in review_sources
-    }
+               "migration_sha256": hashlib.sha256((REPO / "db/migrations/0001_inventory.sql").read_bytes()).hexdigest(),
+               "review_manifest_sha256": manifest_hash}
 
     def run(command, timeout=40, check=True):
         return subprocess.run([str(x) for x in command], cwd=REPO, env=env,
@@ -202,12 +294,14 @@ log_parameter_max_length_on_error = 0
                 if state.returncode == 0:
                     lines = (data / "postmaster.pid").read_text().splitlines()
                     pid = int(lines[0])
-                    if lines[1] != str(data) or pid not in processes_for(data):
+                    if (lines[1] != str(data) or pid not in processes_for(data,pid)
+                            or not verified_postmaster(data,pid)):
                         raise RuntimeError("Postmaster identity mismatch; do not signal/delete")
                     run([pg / "pg_ctl", "-D", data, "-w", "-t", "15", "-m", "fast", "stop"])
                 elif state.returncode != 3:
                     raise RuntimeError("Postmaster state unknown; do not delete")
-                if run([pg / "pg_ctl", "-D", data, "status"], check=False).returncode != 3 or processes_for(data):
+                if (run([pg / "pg_ctl", "-D", data, "status"], check=False).returncode != 3
+                        or processes_for(data) or (data / "postmaster.pid").exists()):
                     raise RuntimeError("Shutdown not confirmed; do not delete")
             if processes_for(data) or not shutil.rmtree.avoids_symlink_attacks:
                 raise RuntimeError("Safe deletion unavailable; do not delete")

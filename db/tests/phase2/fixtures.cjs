@@ -4,7 +4,7 @@ const {id}=require("./common.cjs");
 const A=id(1),B=id(2),P=id(11),Q=id(12),PB=id(13),C=id(21),CB=id(22);
 const issuer="https://phase2-auth.invalid/auth/v1";
 const people={Owner:id(101),Admin:id(102),Staff:id(103),OtherStaff:id(104),Viewer:id(105),
-  OtherCompany:id(106),MultiCompany:id(107),Pending:id(108)};
+  OtherCompany:id(106),MultiCompany:id(107),Pending:id(108),DisabledMember:id(109)};
 const session=name=>id(1000+Number(people[name].slice(-4)));
 const memberships={
   Owner:[[A,"Owner",true]], Admin:[[A,"Admin",true]], Staff:[[A,"Staff",true]],
@@ -12,6 +12,7 @@ const memberships={
   OtherCompany:[[B,"Owner",true]],
   MultiCompany:[[A,"Staff",true],[B,"Viewer",true]],
   Pending:[[A,"Staff",false]],
+  DisabledMember:[[A,"Staff",false]],
 };
 async function seedCore(c) {
   await c.query("SET ROLE stockwise_owner");
