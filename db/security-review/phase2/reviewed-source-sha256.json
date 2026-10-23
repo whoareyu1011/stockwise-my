@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "algorithm": "SHA-256",
+  "status": "Current saved source snapshot only; corrections incomplete; NOT EXECUTED; not approval for testing or deployment.",
+  "sources": {
+    "db/deployment/01_create_roles.sql": "a6e3dc5f5808c77272211a772c66291c9f2c29d26697789c95c06af3ee176ff9",
+    "db/deployment/02_grant_migration_access.sql": "7d1552d4cb9905f2207eb0cb5e7e0b8f71bdfc29abb2bf120c45c8b1a1f725d6",
+    "db/deployment/03_harden_owner_function_defaults.sql": "f8ce56ff614a6e5e6087cec8790d69dfd19b6a71075834ec20874576d5f58bd2",
+    "db/migrations/0001_inventory.sql": "b83c9ace102a0478a55743c9dac1c9e4e25e8e2672a87a7320be31a91780d7c0",
+    "db/security-review/phase2/01_identity.sql": "ac7155241ab4f743b737b83c8a1965d136367487823bf9231ecf2ecd81076f91",
+    "db/security-review/phase2/02_policies_commands.sql": "401fcd8dc06218d7a2fa16222d42e3a7c0ea42bdf6964ab2e8b9bc4719faa413",
+    "db/security-review/phase2/03_adapter_contract.sql": "75848f2bb2655e70a0a1eaf41118fff99cc04f5829fb4cb3a0e2a03224fb4f88",
+    "db/tests/prerequisites.local.cjs": "4ffffe20ed8cf1a21a7d3820f4d3100f8571dc26ffb5aa54464b13d37b0b1aa4",
+    "db/tests/inventory.local.cjs": "8d00681e73cc0b61a7e7cbb18384ebf252b91b1cb49937dc5a40676176bc35c3",
+    "db/tests/runtime-security.local.cjs": "d9f3dad6f2abb8b8e24ab98b4a5418a4a895232609585f3dd92b445e3ba98d4c",
+    "db/tests/run-phase2-isolated.py": "03d44f0d474a1d1c185fb7a0960c0a876e4907df3f0e8ee2654450db11e5a3af",
+    "db/tests/phase2/common.cjs": "03f6418701ad2f4a0867002bfd2655b64293bb6f414b53a35fc463439329b535",
+    "db/tests/phase2/fixtures.cjs": "b9ed036b2e36f9745356c878ad84c35853452b1cd4bc1ae027b66595bae382bf",
+    "db/tests/phase2/inventory-cases.cjs": "bcefad33c565b91e96d8c981b7155f5b053cce3db83258981fce599a865af338",
+    "db/tests/phase2/inventory-concurrency.cjs": "dfb5d0349b902e054bacf29121a36e52193a7839ba7d2439ff06521b17cff3ea",
+    "db/tests/phase2/postgres-adapter.cjs": "9137a22dd8d10fa098c4e0dc1c1cba3d4fe9ecef0104f7f57dc3c47f50306b65",
+    "server/security/authorize.cjs": "c2df237686938acb5e87e74e0751a4e704f9e5584eef33643a20a2626f78fe8c",
+    "server/security/config.cjs": "d74762ee592fb44c7ba7d7e975154300b117abed7765158f54cd930d5c0e01ca",
+    "server/security/errors.cjs": "7bcd0b9e2e56a7e08701c393dcd3b3d0bcc988e4c13fff53c05d6971384ad6e9",
+    "server/security/permissions.cjs": "b204a7d9de9c02a213389b1218c0b8d0d344447811490ff52d78caff4016f20b",
+    "server/security/pools.cjs": "3af1b5b8816dd2777815a63d64f3e540a302a57a8872875e5b2ea21407de1fe8",
+    "server/security/session-status.cjs": "fce53c4a7bd57a57a212985d4c79bfcbc5ee63670ca95ef210b7616683103af9",
+    "server/security/transaction.cjs": "0eaa9a5cc817e8d4c3f1e1301d66b2d8d52cc914ca4509f93e78176bfef2db82",
+    "server/security/verify-token.cjs": "42a7a03179ef507ffab351c8aad9f70a48714ae01c2c94205b8253d3635d1e8b",
+    "tests/security/fixtures.cjs": "a3c2591299f7468d905e245cdfe40fa14965723a209e9b50525286e057088618",
+    "tests/security/security.test.cjs": "9a49a6b47246759e887a66a0ca4bc33174378f38c00c334cfc6c29dce6da2e9c"
+  }
+}
