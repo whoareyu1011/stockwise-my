@@ -26,6 +26,15 @@
 --     boundary against them.
 --   * Neither role is a login, neither has BYPASSRLS, and no Supabase API role
 --     is granted membership in either role. No runtime credential is created.
+--   * The provisioning operator and migrator remain privileged identities;
+--     their access is not technically prevented by the RPC design.
+--   * Membership creation, role changes, deactivation, deletion, and first-
+--     Owner provisioning remain blocked until an approved audit control or
+--     independently verified privileged operational procedure exists. No
+--     application membership-write endpoint is in scope.
+--   * Before deployment, independently enumerate all exposed Data API schemas,
+--     callable roles, their membership closures, and effective grants. The
+--     Dashboard's exposed-schema setting cannot be verified by this SQL.
 --
 -- Exact role grants proposed here:
 --   stockwise_migrator -> each owner role, SET only (no INHERIT, no ADMIN).
@@ -34,6 +43,19 @@
 --   stockwise_product_reader -> no table grants here. The separate product
 --     proposal grants only required SELECT columns and function/schema rights.
 --   No grant is made to anon, authenticated, service_role, or authenticator.
+--   The existing deployment file 02 must already grant stockwise_migrator
+--     CREATE on the target database. This proposal verifies that prerequisite;
+--     it does not grant it. Database CREATE allows schema creation throughout
+--     the database, so the NOLOGIN migrator remains a privileged deployment role.
+--     stockwise_owner and the API/object-owner roles do not need database CREATE.
+--
+-- Supabase API-role attribute assumptions checked below:
+--   * No API role may be SUPERUSER, CREATEROLE, CREATEDB, or REPLICATION.
+--   * service_role may have BYPASSRLS as Supabase's managed service role;
+--     it is still denied the proposed schemas and RPC.
+--   * anon, authenticated, and authenticator must not have BYPASSRLS.
+--   * authenticator may be LOGIN because it is the Data API connection role.
+--   * anon, authenticated, and service_role must not be LOGIN roles.
 --
 -- PostgreSQL version is a target prerequisite: membership option syntax below
 -- requires a server supporting explicit SET/INHERIT role-membership options.
@@ -87,9 +109,23 @@ BEGIN
     SELECT 1 FROM pg_catalog.pg_roles AS r
     WHERE r.rolname IN ('stockwise_owner','stockwise_migrator')
       AND (r.rolcanlogin OR r.rolsuper OR r.rolbypassrls
-           OR r.rolcreatedb OR r.rolcreaterole OR r.rolinherit)
+           OR r.rolcreatedb OR r.rolcreaterole OR r.rolinherit
+           OR r.rolreplication)
   ) THEN
     RAISE EXCEPTION 'Existing StockWise roles do not match their restricted design';
+  END IF;
+
+  IF NOT pg_catalog.has_database_privilege(
+       'stockwise_migrator',pg_catalog.current_database(),'CREATE') THEN
+    RAISE EXCEPTION 'Existing deployment setup must grant target-database CREATE to stockwise_migrator';
+  END IF;
+  IF pg_catalog.has_database_privilege(
+       'stockwise_owner',pg_catalog.current_database(),'CREATE') THEN
+    RAISE EXCEPTION 'stockwise_owner must not have target-database CREATE';
+  END IF;
+  IF NOT pg_catalog.has_schema_privilege(
+       'stockwise_owner','stockwise','USAGE WITH GRANT OPTION') THEN
+    RAISE EXCEPTION 'stockwise_owner must be able to grant stockwise schema USAGE';
   END IF;
 
   IF NOT pg_catalog.pg_has_role(session_user,'stockwise_owner','SET')
@@ -129,6 +165,8 @@ BEGIN
   IF NOT pg_catalog.has_table_privilege(
        'stockwise_owner','stockwise.companies','REFERENCES WITH GRANT OPTION')
      OR NOT pg_catalog.has_schema_privilege(
+       'stockwise_owner','stockwise','USAGE WITH GRANT OPTION')
+     OR NOT pg_catalog.has_schema_privilege(
        current_user,'auth','USAGE WITH GRANT OPTION')
      OR NOT pg_catalog.has_table_privilege(
        current_user,'auth.users','REFERENCES WITH GRANT OPTION')
@@ -142,6 +180,31 @@ BEGIN
     WHERE rolname IN ('anon','authenticated','service_role','authenticator')
   ) <> 4 THEN
     RAISE EXCEPTION 'Supabase API roles are missing; verify the target environment';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles AS api
+    WHERE api.rolname IN ('anon','authenticated','service_role','authenticator')
+      AND (api.rolsuper OR api.rolcreaterole OR api.rolcreatedb
+           OR api.rolreplication
+           OR (api.rolname IN ('anon','authenticated','service_role')
+               AND api.rolcanlogin))
+  ) THEN
+    RAISE EXCEPTION 'A Supabase API role has an unapproved administrative attribute';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles AS api
+    WHERE api.rolname IN ('anon','authenticated','authenticator')
+      AND api.rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'Only the expected service_role may have BYPASSRLS';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles AS api
+    WHERE api.rolname IN ('anon','authenticated','service_role','authenticator')
+      AND pg_catalog.has_database_privilege(
+        api.oid,pg_catalog.current_database(),'CREATE')
+  ) THEN
+    RAISE EXCEPTION 'A Supabase API role has target-database CREATE';
   END IF;
 END
 $preflight$;
@@ -187,9 +250,45 @@ BEGIN
     SELECT 1 FROM pg_catalog.pg_roles AS r
     WHERE r.rolname IN ('stockwise_auth_owner','stockwise_product_reader')
       AND (r.rolcanlogin OR r.rolsuper OR r.rolbypassrls
-           OR r.rolcreatedb OR r.rolcreaterole OR r.rolinherit)
+           OR r.rolcreatedb OR r.rolcreaterole OR r.rolinherit
+           OR r.rolreplication)
   ) THEN
     RAISE EXCEPTION 'New owner roles have unexpected attributes';
+  END IF;
+  IF NOT pg_catalog.has_database_privilege(
+       'stockwise_migrator',pg_catalog.current_database(),'CREATE')
+     OR NOT pg_catalog.has_schema_privilege(
+       'stockwise_owner','stockwise','USAGE WITH GRANT OPTION') THEN
+    RAISE EXCEPTION 'Postflight lost required migration or schema-grant authority';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles AS api
+    WHERE api.rolname IN ('anon','authenticated','service_role','authenticator')
+      AND (api.rolsuper OR api.rolcreaterole OR api.rolcreatedb
+           OR api.rolreplication
+           OR (api.rolname IN ('anon','authenticated','service_role')
+               AND api.rolcanlogin))
+  ) OR EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles AS api
+    WHERE api.rolname IN ('anon','authenticated','authenticator')
+      AND api.rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'Postflight found unapproved Supabase API role attributes';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles AS r
+    WHERE r.rolname IN (
+      'stockwise_owner','stockwise_auth_owner','stockwise_product_reader'
+    )
+      AND pg_catalog.has_database_privilege(
+        r.oid,pg_catalog.current_database(),'CREATE')
+  ) OR EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles AS api
+    WHERE api.rolname IN ('anon','authenticated','service_role','authenticator')
+      AND pg_catalog.has_database_privilege(
+        api.oid,pg_catalog.current_database(),'CREATE')
+  ) THEN
+    RAISE EXCEPTION 'Postflight found target-database CREATE outside the migrator';
   END IF;
 
   IF NOT pg_catalog.pg_has_role(
