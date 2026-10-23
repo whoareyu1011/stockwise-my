@@ -37,6 +37,7 @@
   --amber:#986b12;--amber-bg:#fff5d9;--radius:15px;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--text);
   font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 button,input,select,textarea{font:inherit}
@@ -204,11 +205,11 @@ tbody tr:last-child td{border-bottom:0}
     <div><h2>EntreMaster</h2><small>SME Business Manager</small></div>
   </div>
   <div class="nav-label">WORKSPACE</div>
-  <button class="nav active" data-page="overview"><span class="ico">▦</span> Overview</button>
+  <button class="nav active" data-page="overview" data-demo-only><span class="ico">▦</span> Overview</button>
   <button class="nav" data-page="inventory"><span class="ico">▤</span> Inventory</button>
-  <button class="nav" data-page="record"><span class="ico">＋</span> Record movement</button>
-  <button class="nav" data-page="history"><span class="ico">◷</span> Transaction history</button>
-  <button class="nav" data-page="invoice"><span class="ico">▧</span> E-Invoice</button>
+  <button class="nav" data-page="record" data-demo-only><span class="ico">＋</span> Record movement</button>
+  <button class="nav" data-page="history" data-demo-only><span class="ico">◷</span> Transaction history</button>
+  <button class="nav" data-page="invoice" data-demo-only><span class="ico">▧</span> E-Invoice</button>
   <div class="sidebar-bottom">
     <strong>Privacy first</strong><br>
     Demo data is stored in this browser only. This does not provide account-level security or encrypted cloud storage.
@@ -223,12 +224,13 @@ tbody tr:last-child td{border-bottom:0}
   </div>
   <div class="top-actions">
     <button class="btn mobile-menu" onclick="toggleMobileNav()">☰ Menu</button>
-    <button class="btn primary" onclick="openRecord()">＋ New record</button>
+    <button class="btn primary" onclick="openRecord()" data-demo-only>＋ New record</button>
     <div class="avatar">SME</div>
   </div>
 </header>
+<div class="notice warning" id="dataModeNotice" role="status" aria-live="polite"></div>
 
-<section class="page active" id="page-overview">
+<section class="page active" id="page-overview" data-demo-only>
   <div class="grid metrics">
     <div class="card"><span class="metric-icon">↗️</span><div class="metric-label">Sales recorded</div><div class="metric-value" id="mSales">RM 0.00</div><div class="metric-foot">Customer orders recorded</div></div>
     <div class="card"><span class="metric-icon">↙️</span><div class="metric-label">Purchase costs</div><div class="metric-value" id="mCosts">RM 0.00</div><div class="metric-foot">Supplier purchases recorded</div></div>
@@ -252,18 +254,18 @@ tbody tr:last-child td{border-bottom:0}
 </section>
 
 <section class="page" id="page-inventory">
-  <div class="page-intro"><div><h2>Product catalogue</h2><p>Manage SKUs, categories, pricing and available stock.</p></div><button class="btn primary" onclick="openProduct()">＋ Add product</button></div>
+  <div class="page-intro"><div><h2>Product catalogue</h2><p>Manage SKUs, categories, pricing and available stock.</p></div><button class="btn primary" onclick="openProduct()" data-demo-only>＋ Add product</button></div>
   <div class="card">
     <div class="toolbar">
       <input class="search" id="inventorySearch" placeholder="Search SKU, product or category..." oninput="renderInventory()">
       <select class="search" id="categoryFilter" onchange="renderInventory()"><option value="">All categories</option></select>
-      <button class="btn" onclick="exportInventory()">Export CSV</button>
+      <button class="btn" onclick="exportInventory()" data-demo-only>Export CSV</button>
     </div>
-    <div class="table-wrap"><table><thead><tr><th>SKU / product</th><th>Category</th><th>Cost price</th><th>Selling price</th><th>Stock balance</th><th>Stock value</th><th>Actions</th></tr></thead><tbody id="inventoryBody"></tbody></table></div>
+    <div class="table-wrap"><table><thead id="inventoryHead"><tr><th>SKU / product</th><th>Category</th><th>Cost price</th><th>Selling price</th><th>Stock balance</th><th>Stock value</th><th>Actions</th></tr></thead><tbody id="inventoryBody"></tbody></table></div>
   </div>
 </section>
 
-<section class="page" id="page-record">
+<section class="page" id="page-record" data-demo-only>
   <div class="page-intro"><div><h2>Record stock movement</h2><p>Upload a chat screenshot or enter an order manually.</p></div></div>
   <div class="notice">Simple workflow: upload or enter details → check extracted information → confirm the record. A screenshot is not automatically interpreted in this demo. In production, connect private OCR and require your approval before saving.</div>
   <div class="card">
@@ -301,7 +303,7 @@ tbody tr:last-child td{border-bottom:0}
   </div>
 </section>
 
-<section class="page" id="page-history">
+<section class="page" id="page-history" data-demo-only>
   <div class="page-intro"><div><h2>Transaction history</h2><p>Find customer orders, supplier purchases or an individual SKU.</p></div><button class="btn" onclick="exportHistory()">Export CSV</button></div>
   <div class="card">
     <div class="toolbar">
@@ -313,7 +315,7 @@ tbody tr:last-child td{border-bottom:0}
   <div class="card" id="historyDetail" style="margin-top:18px;display:none"></div>
 </section>
 
-<section class="page" id="page-invoice">
+<section class="page" id="page-invoice" data-demo-only>
   <div class="page-intro"><div><h2>E-Invoice workspace</h2><p>Prepare a draft from an existing transaction, review it, and validate required fields.</p></div></div>
   <div class="notice warning"><strong>Important:</strong> A locally generated document is not an official Malaysian e-Invoice. Actual issuance requires the applicable LHDN MyInvois submission and validation workflow. The TIN, classification, tax and QR details below must be verified; this demo cannot submit invoices to LHDN.</div>
   <div class="card">
@@ -389,6 +391,9 @@ tbody tr:last-child td{border-bottom:0}
   access controls, backups and audited invoice submission.
 */
 const STORAGE_KEY = "stockwise_my_demo_v1";
+// Switch to "api" only after an authenticated, RLS-protected product endpoint exists.
+const PRODUCT_DATA_MODE = "demo";
+const isDemoMode = PRODUCT_DATA_MODE === "demo";
 const money = n => "RM " + Number(n || 0).toLocaleString("en-MY",{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc = s => String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const uid = prefix => prefix + "-" + Date.now().toString(36).toUpperCase() + "-" + Math.random().toString(36).slice(2,6).toUpperCase();
@@ -417,8 +422,76 @@ function loadData(){
     return d;
   }catch(e){return initialData()}
 }
-let db=loadData();
+let db=isDemoMode?loadData():{products:[],transactions:[],invoices:[],settings:{businessName:""}};
+let productApiError="";
+const productDataAdapters={
+  demo:{
+    async list(){return db.products}
+  },
+  api:{
+    async list(){
+      const authProvider=window.stockwiseAuth;
+      if(!authProvider||typeof authProvider.getAccessToken!=="function"){
+        throw new Error("Authenticated product API is not configured.");
+      }
+      const token=await authProvider.getAccessToken();
+      if(typeof token!=="string"||!token.trim()){
+        throw new Error("Sign in is required before loading API products.");
+      }
+      const response=await fetch("/api/products",{
+        headers:{Accept:"application/json",Authorization:`Bearer ${token}`}
+      });
+      const payload=await response.json().catch(()=>null);
+      if(!response.ok||payload?.success!==true||!Array.isArray(payload.products)){
+        throw new Error(payload?.error||`Product API unavailable (${response.status}).`);
+      }
+      return payload.products.map(product=>{
+        if(!product||product.id==null||typeof product.sku!=="string"||
+           typeof product.name!=="string"||typeof product.category!=="string"){
+          throw new Error("Product API returned an invalid product record.");
+        }
+        // Keep this first adapter projection intentionally limited. The API
+        // contract must approve any additional fields before they are rendered.
+        return {id:String(product.id),sku:product.sku,name:product.name,category:product.category};
+      });
+    }
+  }
+};
+function requireDemoMode(action){
+  if(isDemoMode)return true;
+  toast(`${action} is available only in local demo mode.`);
+  return false;
+}
+function applyDataModeUI(){
+  const notice=document.getElementById("dataModeNotice");
+  document.querySelectorAll("[data-demo-only]").forEach(el=>{el.hidden=!isDemoMode});
+  if(isDemoMode){
+    notice.textContent="DEMO MODE · Business data is stored in this browser only. This app is not connected to Supabase.";
+    notice.className="notice warning";
+    return;
+  }
+  document.querySelectorAll(".page").forEach(page=>page.classList.toggle("active",page.id==="page-inventory"));
+  document.querySelectorAll(".nav").forEach(button=>button.classList.toggle("active",button.dataset.page==="inventory"));
+  document.getElementById("pageTitle").textContent="Products";
+  notice.textContent="API MODE · Read-only product data only. Other local demo workflows are disabled.";
+}
+async function initializeApplication(){
+  applyDataModeUI();
+  if(!isDemoMode){
+    try{
+      db.products=await productDataAdapters.api.list();
+    }catch(error){
+      productApiError=error instanceof Error?error.message:"Product API unavailable.";
+      db.products=[];
+      document.getElementById("dataModeNotice").textContent=`API MODE · ${productApiError} No demo fallback was loaded.`;
+      document.getElementById("dataModeNotice").className="notice warning";
+    }
+  }
+  renderLines();
+  renderAll();
+}
 function persist(){
+  if(!requireDemoMode("Saving data"))return false;
   try{localStorage.setItem(STORAGE_KEY,JSON.stringify(db));return true}
   catch(e){toast("Unable to save. Browser storage may be full.");return false}
 }
@@ -498,16 +571,28 @@ function renderInventory(){
   const cat=document.getElementById("categoryFilter").value;
   const products=db.products.filter(p=>(!cat||p.category===cat)&&[p.sku,p.name,p.category].some(x=>String(x).toLowerCase().includes(q))).sort((a,b)=>a.category.localeCompare(b.category)||a.sku.localeCompare(b.sku));
   const body=document.getElementById("inventoryBody");
-  body.innerHTML=products.length?products.map(p=>`<tr>
+  const head=document.getElementById("inventoryHead");
+  if(isDemoMode){
+    head.innerHTML="<tr><th>SKU / product</th><th>Category</th><th>Cost price</th><th>Selling price</th><th>Stock balance</th><th>Stock value</th><th>Actions</th></tr>";
+  }else{
+    head.innerHTML="<tr><th>SKU / product</th><th>Category</th></tr>";
+  }
+  if(!isDemoMode&&productApiError){
+    body.innerHTML=`<tr><td colspan="2"><div class="empty">${esc(productApiError)}</div></td></tr>`;
+    return;
+  }
+  body.innerHTML=products.length?products.map(p=>isDemoMode?`<tr>
     <td><div class="strong">${esc(p.name)}</div><div class="muted">${esc(p.sku)}</div></td>
     <td><span class="pill blue">${esc(p.category)}</span></td>
     <td>${money(p.cost)}</td><td>${money(p.price)}</td>
     <td><span class="pill ${p.stock<=p.threshold?"amber":"green"}">${p.stock} units</span></td>
     <td>${money(p.stock*p.cost)}</td>
-    <td><button class="btn small" onclick="openProduct('${p.id}')">Edit</button> <button class="btn small danger" onclick="deleteProduct('${p.id}')">Delete</button></td>
-  </tr>`).join(""):`<tr><td colspan="7"><div class="empty">No matching products.</div></td></tr>`;
+    <td><button class="btn small" onclick="openProduct('${esc(p.id)}')">Edit</button> <button class="btn small danger" onclick="deleteProduct('${esc(p.id)}')">Delete</button></td>
+  </tr>`:`<tr><td><div class="strong">${esc(p.name)}</div><div class="muted">${esc(p.sku)}</div></td>
+    <td><span class="pill blue">${esc(p.category)}</span></td></tr>`).join(""):`<tr><td colspan="${isDemoMode?7:2}"><div class="empty">No matching products.</div></td></tr>`;
 }
 function openProduct(id=null){
+  if(!requireDemoMode("Product editing"))return;
   editingProductId=id;
   const p=id?getProduct(id):null;
   document.getElementById("productModalTitle").textContent=p?"Edit product":"Add product";
@@ -530,6 +615,7 @@ function nextSku(category){
   return prefix+String(max+1).padStart(4,"0");
 }
 function saveProduct(){
+  if(!requireDemoMode("Product editing"))return;
   const name=document.getElementById("pName").value.trim(),category=document.getElementById("pCategory").value.trim();
   const cost=Number(document.getElementById("pCost").value),price=Number(document.getElementById("pPrice").value);
   const stock=Number(document.getElementById("pStock").value),threshold=Number(document.getElementById("pThreshold").value);
@@ -545,6 +631,7 @@ function saveProduct(){
   persist();closeModal("productModal");renderAll();toast("Product saved.");
 }
 function deleteProduct(id){
+  if(!requireDemoMode("Product deletion"))return;
   const p=getProduct(id);if(!p)return;
   if(db.transactions.some(t=>t.lines.some(l=>l.productId===id))){toast("Cannot delete a product with transaction history. Set stock to zero instead.");return}
   if(confirm("Delete "+p.name+"?")){db.products=db.products.filter(x=>x.id!==id);persist();renderAll();toast("Product deleted.")}
@@ -555,14 +642,16 @@ function exportCSV(filename,rows){
   const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);
 }
 function exportInventory(){
+  if(!requireDemoMode("Inventory export"))return;
   exportCSV("stockwise-inventory.csv",[["SKU","Product","Category","Cost","Selling price","Stock","Stock value"],...db.products.map(p=>[p.sku,p.name,p.category,p.cost,p.price,p.stock,p.stock*p.cost])]);
 }
 function exportHistory(){
+  if(!requireDemoMode("History export"))return;
   exportCSV("stockwise-transactions.csv",[["Date","Reference","Party","Type","Items","Subtotal","Discount","Total","Payment status"],...db.transactions.map(t=>[t.date,t.ref,t.party,typeLabel(t.type),t.lines.map(l=>l.sku+" x "+l.qty).join("; "),t.subtotal,t.discount,t.total,t.paymentStatus])]);
 }
 
 /* RECORD MOVEMENT */
-function openRecord(){navigate("record");resetRecord()}
+function openRecord(){if(!requireDemoMode("Recording stock movements"))return;navigate("record");resetRecord()}
 function updateMovementLabels(){
   const type=document.getElementById("rType").value;
   document.getElementById("lineTitle").textContent=type==="sale"?"Items sold to customer":type==="purchase"?"Items purchased from supplier":"Items for stock adjustment";
@@ -641,6 +730,7 @@ function validateLines(lines,type){
   return "";
 }
 function reviewRecord(){
+  if(!requireDemoMode("Recording stock movements"))return;
   const type=document.getElementById("rType").value,party=document.getElementById("rParty").value.trim(),date=document.getElementById("rDate").value;
   const lines=collectLines(),err=validateLines(lines,type);
   if(!party||!date){toast("Enter a name and transaction date.");return}
@@ -663,6 +753,7 @@ function backToEntry(){
   document.getElementById("step2").classList.remove("active");
 }
 function confirmRecord(){
+  if(!requireDemoMode("Recording stock movements"))return;
   if(!recordDraft)return;
   const err=validateLines(recordDraft.lines,recordDraft.type);if(err){toast(err);backToEntry();return}
   const tx={...recordDraft,id:uid("TX"),createdAt:new Date().toISOString()};
@@ -774,6 +865,7 @@ function renderInvoicePaper(d){
     <div style="margin-top:28px;padding-top:15px;border-top:1px solid #e5e9f2;font-size:10px;color:#718096;line-height:1.7">DRAFT — NOT AN OFFICIAL VALIDATED MALAYSIAN E-INVOICE. No LHDN submission ID, validation timestamp or official QR has been issued. Verify applicable tax and classification details before issuing.</div>`;
 }
 function confirmInvoice(){
+  if(!requireDemoMode("Invoice draft saving"))return;
   if(!currentInvoice){toast("Preview the invoice first.");return}
   const errors=validateInvoice(invoiceData());
   if(errors.length){toast("Resolve the missing fields before confirming.");return}
@@ -815,7 +907,7 @@ function emailInvoice(){
 
 /* Initial demo content: deliberately no real customer information. */
 document.getElementById("rDate").value=today();
-renderLines();renderAll();
+void initializeApplication();
 </script>
 </body>
 </html>
