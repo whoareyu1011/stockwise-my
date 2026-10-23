@@ -158,7 +158,9 @@ BEGIN
   SELECT * INTO STRICT m FROM sw2_auth.member(p_company,true);
   IF m.role NOT IN ('Owner','Admin') THEN RAISE EXCEPTION 'Posting denied' USING ERRCODE='42501'; END IF;
   SELECT * INTO o FROM stockwise.orders WHERE company_id=p_company AND id=p_order FOR UPDATE;
-  IF NOT FOUND OR o.kind NOT IN ('sale','purchase','adjustment_in','adjustment_out','opening_balance')
+  -- Phase 2A deliberately exposes ordinary sales/purchases only. Stock
+  -- adjustments and opening balances remain unavailable to runtime callers.
+  IF NOT FOUND OR o.kind NOT IN ('sale','purchase')
     OR sw2_auth.cancelled(p_company,p_order) THEN RAISE EXCEPTION 'Posting denied' USING ERRCODE='42501'; END IF;
   result:=stockwise.post_order(p_company,p_order,p_key);
   PERFORM sw2_auth.event(p_company,'order_posted',result,p_key);
@@ -240,11 +242,6 @@ BEGIN
 END $append_only$;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA sw2_api FROM PUBLIC;
 REVOKE ALL ON FUNCTION sw2_auth.guard_cancelled() FROM PUBLIC;
--- Runtime can reach only explicit API entry points, never core functions.
-GRANT EXECUTE ON FUNCTION sw2_api.products(uuid),sw2_api.quantities(uuid),
-  sw2_api.status(uuid,uuid),sw2_api.sales_products(uuid),sw2_api.sales_order(uuid,uuid),
-  sw2_api.business_products(uuid),sw2_api.create_draft(uuid,uuid,text,text,date),
-  sw2_api.edit_notes(uuid,uuid,text),sw2_api.set_line(uuid,uuid,uuid,integer,bigint,numeric,numeric),
-  sw2_api.post_order(uuid,uuid,uuid),sw2_api.reverse_order(uuid,uuid,uuid,date,text),
-  sw2_api.cancel_draft(uuid,uuid,uuid,text) TO sw2_runtime;
+-- No runtime execution grant is committed at this stage. The final stage
+-- grants the complete reviewed API surface and activates LOGINs atomically.
 COMMIT;

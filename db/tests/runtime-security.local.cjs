@@ -12,7 +12,29 @@ async function main(){
   const root=process.argv[2];h.gate(root,"phase2");
   const r=h.report(root);let admin,db;
   try{
-    await r.check("S01 foundation + additive candidates compile",async()=>{admin=await h.installFoundation(root,true);});
+    await r.check("S01 original foundation installs before the additive stages",async()=>{
+      admin=await h.installFoundation(root,false);
+    });
+    await r.check("S01a interruption after stage 02 leaves all runtime access disabled",async()=>{
+      await h.installSecurityStage(admin,"01_identity.sql");
+      await h.installSecurityStage(admin,"02_policies_commands.sql");
+      const roles=(await admin.query(`SELECT rolname,rolcanlogin FROM pg_roles
+        WHERE rolname IN ('sw2_business','sw2_issuer') ORDER BY rolname`)).rows;
+      assert.deepEqual(roles,[{rolname:"sw2_business",rolcanlogin:false},
+        {rolname:"sw2_issuer",rolcanlogin:false}]);
+      for(const [member,parent] of [["sw2_business","sw2_runtime"],["sw2_issuer","sw2_verifier"]])
+        assert.equal((await admin.query("SELECT pg_has_role($1,$2,'MEMBER') b",[member,parent])).rows[0].b,false);
+      assert.equal((await admin.query(`SELECT count(*)::int n FROM pg_proc p
+        WHERE p.pronamespace='sw2_api'::regnamespace
+          AND has_function_privilege('sw2_business',p.oid,'EXECUTE')`)).rows[0].n,0);
+      for(const role of ["stockwise_owner","sw2_basic_reader","sw2_sales_reader","sw2_business_reader","sw2_draft_writer"])
+        assert.equal((await admin.query("SELECT has_schema_privilege($1,'sw2_api','CREATE') b",[role])).rows[0].b,false);
+    });
+    await r.check("S01b final stage compiles and atomically activates the exact API",async()=>{
+      await h.installSecurityStage(admin,"03_adapter_contract.sql");
+      for(const role of ["sw2_business","sw2_issuer"])
+        assert.equal((await admin.query("SELECT rolcanlogin FROM pg_roles WHERE rolname=$1",[role])).rows[0].rolcanlogin,true);
+    });
     await f.seedCore(admin);await f.seedSecurity(admin);
     db=createPostgresAdapters(root);
     const {generateKeyPair,exportJWK,SignJWT}=await import("jose");
@@ -48,8 +70,12 @@ async function main(){
           sessionId:f.session(name),...target,expiresAt:Math.floor(Date.now()/1000)+20});
         await db.adapter.activateProof(c,proof);
         return await fn(c,{proof,target});
-      }finally{await c.query("ROLLBACK").catch(()=>{});await db.adapter.reset(c).catch(()=>{});
-        c.release();v.release();}
+      }finally{
+        await c.query("ROLLBACK").catch(()=>{});
+        let destroy=false;
+        try{await db.adapter.reset(c);}catch{destroy=true;}
+        c.release(destroy);v.release();
+      }
     }
     const sqlDenied=(fn)=>h.denied(fn,["42501","P0001","25001","23505"]);
     async function noRows(c,sql,values){
@@ -131,7 +157,10 @@ async function main(){
     await r.check("S09 runtime cannot read/write raw tables or execute core/private functions",async()=>{
       const c=await h.connect(root,"sw2_business");
       try{
-        for(const table of ["stockwise.products","stockwise.orders","stockwise.stock_balances","sw2_auth.proofs","sw2_auth.memberships"])
+        for(const table of ["stockwise.companies","stockwise.products","stockwise.contacts","stockwise.orders",
+          "stockwise.order_items","stockwise.stock_balances","stockwise.stock_movements","stockwise.audit_logs",
+          "sw2_auth.identities","sw2_auth.companies","sw2_auth.memberships","sw2_auth.sessions",
+          "sw2_auth.proofs","sw2_auth.creators","sw2_auth.cancellations","sw2_auth.events"])
           await sqlDenied(()=>c.query(`SELECT * FROM ${table}`));
         for(const sql of ["SET ROLE stockwise_owner","SET ROLE stockwise_migrator","SET ROLE sw2_draft_writer","SET ROLE sw2_runtime",
           "SELECT sw2_auth.context()","SELECT stockwise.post_order(NULL,NULL,NULL)",
@@ -232,7 +261,21 @@ async function main(){
       const b=await request("Viewer","product.basic.read","SELECT pg_backend_pid() pid,sw2_api.membership($1) actor",[f.A]);
       assert.equal(a[0].pid,b[0].pid);assert.equal(b[0].actor.identityId,f.people.Viewer);
     });
-    await r.check("S18 fixed search paths, tier owners/columns and API-role effective denials",async()=>{
+    await r.check("S17b DISCARD ALL removes session contamination before pooled reuse",async()=>{
+      const first=await request("Owner","product.basic.read",null,[],{work:async c=>{
+        await c.query("SET search_path=pg_temp,public; SET application_name='phase2-contaminated'; CREATE TEMP TABLE pool_contamination(id int)");
+        return (await c.query("SELECT pg_backend_pid() pid")).rows[0].pid;
+      }});
+      const second=await request("Viewer","product.basic.read",null,[],{work:async c=>
+        (await c.query(`SELECT pg_backend_pid() pid,current_user role,current_setting('search_path') search_path,
+          current_setting('application_name') app,to_regclass('pg_temp.pool_contamination') temp_table`)).rows[0]});
+      assert.equal(first,second[0].pid);
+      assert.equal(second[0].role,"sw2_business");
+      assert.notEqual(second[0].search_path,"pg_temp, public");
+      assert.equal(second[0].app,"stockwise_disposable_phase2");
+      assert.equal(second[0].temp_table,null);
+    });
+    await r.check("S18 exact definer ownership, paths, execute allowlists and column grants",async()=>{
       const owners={products:"sw2_basic_reader",quantities:"sw2_basic_reader",status:"sw2_basic_reader",
         sales_products:"sw2_sales_reader",sales_order:"sw2_sales_reader",customers:"sw2_basic_reader",
         work_customer:"sw2_sales_reader",business_products:"sw2_business_reader",
@@ -247,6 +290,39 @@ async function main(){
         assert(row.proconfig.some(v=>v.replace(/\s/g,"")==="search_path=pg_catalog,pg_temp"));}
       for(const role of ["sw2_basic_reader","sw2_sales_reader","sw2_draft_writer"])
         assert.equal((await admin.query("SELECT has_column_privilege($1,'stockwise.products','unit_cost','SELECT') b",[role])).rows[0].b,false);
+      const privileged=(await admin.query(`SELECT n.nspname,p.proname,r.rolname owner
+        FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+        JOIN pg_roles r ON r.oid=p.proowner
+        WHERE p.prosecdef AND n.nspname IN ('stockwise','sw2_auth','sw2_api')
+        ORDER BY n.nspname,p.proname`)).rows;
+      assert(privileged.length>0);
+      for(const row of privileged){
+        const expected=row.nspname==="stockwise"?"stockwise_owner":
+          row.nspname==="sw2_auth"?(row.proname==="guard_cancelled"?"stockwise_owner":"sw2_auth_owner"):owners[row.proname];
+        assert.equal(row.owner,expected,`Unexpected SECURITY DEFINER owner: ${row.nspname}.${row.proname}`);
+        const conf=(await admin.query(`SELECT proconfig FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname=$1 AND p.proname=$2 AND p.prosecdef`,[row.nspname,row.proname])).rows[0].proconfig;
+        assert(conf.some(v=>v.replace(/\s/g,"")==="search_path=pg_catalog,pg_temp"));
+      }
+      const runtimeExpected=new Set(["activate","products","quantities","status","sales_products","sales_order",
+        "business_products","create_draft","edit_notes","set_line","post_order","reverse_order","cancel_draft",
+        "membership","resource","target_member","authorize","customers","work_customer","movements","audit"]);
+      const verifierExpected=new Set(["issue","session_status"]);
+      for(const [role,expected] of [["sw2_business",runtimeExpected],["sw2_issuer",verifierExpected]]){
+        const rows=(await admin.query(`SELECT n.nspname,p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname IN ('stockwise','sw2_auth','sw2_api')
+            AND has_function_privilege($1,p.oid,'EXECUTE')`,[role])).rows;
+        const actual=new Set(rows.map(row=>row.nspname==="sw2_api"?row.proname:row.nspname==="sw2_auth"?row.proname:"stockwise."+row.proname));
+        assert.deepEqual([...actual].sort(),[...expected].sort(),`Unexpected function EXECUTE set for ${role}`);
+      }
+      for(const role of ["sw2_business","sw2_issuer"]){
+        for(const table of ["companies","products","contacts","orders","order_items","stock_balances","stock_movements","audit_logs"])
+          for(const privilege of ["SELECT","INSERT","UPDATE","DELETE","TRUNCATE","REFERENCES","TRIGGER"])
+            assert.equal((await admin.query("SELECT has_table_privilege($1,$2,$3) b",[role,"stockwise."+table,privilege])).rows[0].b,
+              false,`${role} must not have ${privilege} on stockwise.${table}`);
+      }
+      await h.denied(()=>admin.query("UPDATE sw2_auth.memberships SET role='Operator' WHERE company_id=$1 AND identity_id=$2",[f.A,f.people.Staff]),["23514"]);
+      await h.denied(()=>admin.query("UPDATE sw2_auth.memberships SET role='root' WHERE company_id=$1 AND identity_id=$2",[f.A,f.people.Staff]),["23514"]);
       for(const role of ["anon","authenticated","service_role","authenticator"]){
         await admin.query(`SET ROLE ${role}`);
         try{

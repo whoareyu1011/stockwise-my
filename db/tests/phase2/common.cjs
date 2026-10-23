@@ -8,7 +8,50 @@ const { Client, Pool } = require("pg");
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
 const source = p => fs.readFileSync(path.resolve(p),"utf8");
 const migrationHash = "b83c9ace102a0478a55743c9dac1c9e4e25e8e2672a87a7320be31a91780d7c0";
+const reviewedSources = [
+  "db/deployment/01_create_roles.sql",
+  "db/deployment/02_grant_migration_access.sql",
+  "db/deployment/03_harden_owner_function_defaults.sql",
+  "db/migrations/0001_inventory.sql",
+  "db/security-review/phase2/01_identity.sql",
+  "db/security-review/phase2/02_policies_commands.sql",
+  "db/security-review/phase2/03_adapter_contract.sql",
+  "db/tests/prerequisites.local.cjs",
+  "db/tests/inventory.local.cjs",
+  "db/tests/runtime-security.local.cjs",
+  "db/tests/run-phase2-isolated.py",
+  "db/tests/phase2/common.cjs",
+  "db/tests/phase2/fixtures.cjs",
+  "db/tests/phase2/inventory-cases.cjs",
+  "db/tests/phase2/inventory-concurrency.cjs",
+  "db/tests/phase2/postgres-adapter.cjs",
+  "server/security/authorize.cjs",
+  "server/security/config.cjs",
+  "server/security/errors.cjs",
+  "server/security/permissions.cjs",
+  "server/security/pools.cjs",
+  "server/security/session-status.cjs",
+  "server/security/transaction.cjs",
+  "server/security/verify-token.cjs",
+  "tests/security/fixtures.cjs",
+  "tests/security/security.test.cjs",
+];
+function verifyReviewedSources() {
+  const manifestPath = path.resolve("db/security-review/phase2/reviewed-source-sha256.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  assert.equal(manifest.version, 1);
+  assert.equal(manifest.algorithm, "SHA-256");
+  assert.deepEqual(Object.keys(manifest.sources).sort(), [...reviewedSources].sort());
+  for (const relative of reviewedSources) {
+    const absolute = path.resolve(relative);
+    const withinRoot = path.relative(process.cwd(), absolute);
+    assert(!withinRoot.startsWith("..") && !path.isAbsolute(withinRoot));
+    const actual = crypto.createHash("sha256").update(fs.readFileSync(absolute)).digest("hex");
+    assert.equal(actual, manifest.sources[relative], `Reviewed source changed: ${relative}`);
+  }
+}
 function gate(root, suite) {
+  verifyReviewedSources();
   assert.equal(process.env.STOCKWISE_PHASE2_EXECUTION, "explicitly-approved");
   assert(new RegExp(`^/tmp/stockwise-${suite}-[A-Za-z0-9]+$`).test(root || ""));
   assert.equal(fs.realpathSync(root),root);
@@ -16,6 +59,10 @@ function gate(root, suite) {
   const marker = JSON.parse(fs.readFileSync(path.join(root,"approved-lab.json"),"utf8"));
   assert.equal(marker.root,root); assert.equal(marker.suite,suite);
   assert.equal(crypto.createHash("sha256").update(source("db/migrations/0001_inventory.sql")).digest("hex"),migrationHash);
+}
+async function installSecurityStage(admin, filename) {
+  assert(["01_identity.sql", "02_policies_commands.sql", "03_adapter_contract.sql"].includes(filename));
+  await admin.query(source("db/security-review/phase2/" + filename));
 }
 function settings(root,user="runner",database="stockwise_lab") {
   return {host:path.join(root,"socket"),port:6543,user,database,ssl:false,
@@ -59,7 +106,7 @@ async function installFoundation(root,security=false,tailRollbackProbe=false) {
   const admin=await connect(root);
   try {
     if(security) for(const p of ["01_identity.sql","02_policies_commands.sql","03_adapter_contract.sql"])
-      await admin.query(source("db/security-review/phase2/"+p));
+      await installSecurityStage(admin,p);
     return admin;
   } catch(e) {await admin.end(); throw e;}
 }
@@ -104,4 +151,5 @@ function report(root) {
   };
 }
 module.exports={fs,path,assert,Client,Pool,id,source,gate,settings,connect,
-  installFoundation,denied,transaction,savepoint,reconcile,report};
+  installFoundation,installSecurityStage,verifyReviewedSources,
+  denied,transaction,savepoint,reconcile,report};

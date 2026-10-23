@@ -26,7 +26,11 @@ function createPostgresAdapters(root) {
     },
     async commit(c) {await c.query("COMMIT");},
     async rollback(c) {await c.query("ROLLBACK");},
-    async reset(c) {await c.query("RESET sw2.proof");},
+    // Runner calls reset only after COMMIT or ROLLBACK. DISCARD ALL clears
+    // transaction-local and session-level settings, role/session authorization,
+    // temporary objects, prepared statements, listeners and advisory locks.
+    // If it fails, Phase 1's runner destroys rather than reuses the client.
+    async reset(c) {await c.query("DISCARD ALL");},
   };
   function repositoryFactory(c) {
     return {

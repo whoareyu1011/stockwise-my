@@ -23,10 +23,10 @@ CREATE ROLE sw2_business_reader NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOC
 CREATE ROLE sw2_draft_writer NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOINHERIT;
 CREATE ROLE sw2_runtime NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOINHERIT;
 CREATE ROLE sw2_verifier NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOINHERIT;
-CREATE ROLE sw2_business LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB INHERIT;
-CREATE ROLE sw2_issuer LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB INHERIT;
-GRANT sw2_runtime TO sw2_business WITH ADMIN FALSE, INHERIT TRUE, SET FALSE;
-GRANT sw2_verifier TO sw2_issuer WITH ADMIN FALSE, INHERIT TRUE, SET FALSE;
+-- LOGINs and capability memberships are activated only by the final stage.
+-- An interrupted stage 01/02 installation therefore has no usable runtime login.
+CREATE ROLE sw2_business NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB INHERIT;
+CREATE ROLE sw2_issuer NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB INHERIT;
 CREATE SCHEMA sw2_auth AUTHORIZATION sw2_auth_owner;
 CREATE SCHEMA sw2_api AUTHORIZATION sw2_auth_owner;
 REVOKE ALL ON SCHEMA sw2_auth,sw2_api FROM PUBLIC;
@@ -38,10 +38,9 @@ GRANT USAGE ON SCHEMA sw2_auth TO stockwise_owner,sw2_basic_reader,sw2_sales_rea
 GRANT USAGE ON SCHEMA sw2_api TO sw2_runtime;
 GRANT USAGE ON SCHEMA sw2_api TO stockwise_owner,sw2_basic_reader,sw2_sales_reader,
   sw2_business_reader,sw2_draft_writer;
--- Temporary schema CREATE is only for assigning function ownership later.
-GRANT CREATE ON SCHEMA sw2_api TO stockwise_owner,sw2_basic_reader,sw2_sales_reader,
-  sw2_business_reader,sw2_draft_writer;
-GRANT CREATE ON SCHEMA sw2_auth TO stockwise_owner;
+-- No temporary CREATE grants: this laboratory bootstrap uses its reviewed
+-- installer authority to create and reassign function ownership. A hosted
+-- deployment authority is a separate unresolved design, not a runtime grant.
 DO $defaults$
 DECLARE r text;
 BEGIN

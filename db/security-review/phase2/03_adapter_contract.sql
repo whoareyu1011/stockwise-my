@@ -88,7 +88,7 @@ BEGIN
   SELECT * INTO STRICT c FROM sw2_auth.context();
   IF p_action IN ('product.basic.read','stock.quantity.read') THEN allowed:=true;
   ELSIF p_action IN ('product.sales.read','contact.select') THEN allowed:=m.role IN ('Owner','Admin','Staff');
-  ELSIF p_action IN ('product.cost.read','product.write','stock.history.read','contact.manage','export','stock.adjust','audit.read')
+  ELSIF p_action IN ('product.cost.read','product.write','stock.history.read','contact.manage','export','audit.read')
     THEN allowed:=m.role IN ('Owner','Admin');
   ELSIF p_action='draft.create' THEN
     kind:=p_kind; allowed:=p_kind IN ('sale','purchase') AND
@@ -116,11 +116,23 @@ END $f$;
 ALTER FUNCTION sw2_api.authorize(uuid,text,uuid,text,uuid,text) OWNER TO stockwise_owner;
 GRANT EXECUTE ON FUNCTION sw2_api.target_member(uuid,uuid) TO stockwise_owner;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA sw2_api FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION sw2_api.membership(uuid),sw2_api.resource(uuid,uuid),
+-- Final-stage API grant: no earlier stage makes the runtime role usable.
+GRANT EXECUTE ON FUNCTION sw2_api.products(uuid),sw2_api.quantities(uuid),
+  sw2_api.status(uuid,uuid),sw2_api.sales_products(uuid),sw2_api.sales_order(uuid,uuid),
+  sw2_api.business_products(uuid),sw2_api.create_draft(uuid,uuid,text,text,date),
+  sw2_api.edit_notes(uuid,uuid,text),sw2_api.set_line(uuid,uuid,uuid,integer,bigint,numeric,numeric),
+  sw2_api.post_order(uuid,uuid,uuid),sw2_api.reverse_order(uuid,uuid,uuid,date,text),
+  sw2_api.cancel_draft(uuid,uuid,uuid,text),sw2_api.membership(uuid),sw2_api.resource(uuid,uuid),
   sw2_api.target_member(uuid,uuid),sw2_api.authorize(uuid,text,uuid,text,uuid,text),
   sw2_api.customers(uuid),sw2_api.work_customer(uuid,uuid),sw2_api.movements(uuid),sw2_api.audit(uuid)
   TO sw2_runtime;
 REVOKE CREATE ON SCHEMA sw2_api FROM stockwise_owner,sw2_basic_reader,sw2_sales_reader,
   sw2_business_reader,sw2_draft_writer;
 REVOKE CREATE ON SCHEMA sw2_auth FROM stockwise_owner;
+-- Activation is transactionally coupled to the complete API grant. Until this
+-- point both test LOGIN roles are NOLOGIN and have no capability memberships.
+GRANT sw2_runtime TO sw2_business WITH ADMIN FALSE, INHERIT TRUE, SET FALSE;
+GRANT sw2_verifier TO sw2_issuer WITH ADMIN FALSE, INHERIT TRUE, SET FALSE;
+ALTER ROLE sw2_business LOGIN;
+ALTER ROLE sw2_issuer LOGIN;
 COMMIT;

@@ -3,8 +3,16 @@
 const {id}=require("./common.cjs");
 const A=id(1),B=id(2),P=id(11),Q=id(12),PB=id(13),C=id(21),CB=id(22);
 const issuer="https://phase2-auth.invalid/auth/v1";
-const people={Owner:id(101),Admin:id(102),Staff:id(103),OtherStaff:id(104),Viewer:id(105),OtherCompany:id(106)};
+const people={Owner:id(101),Admin:id(102),Staff:id(103),OtherStaff:id(104),Viewer:id(105),
+  OtherCompany:id(106),MultiCompany:id(107),Pending:id(108)};
 const session=name=>id(1000+Number(people[name].slice(-4)));
+const memberships={
+  Owner:[[A,"Owner",true]], Admin:[[A,"Admin",true]], Staff:[[A,"Staff",true]],
+  OtherStaff:[[A,"Staff",true]], Viewer:[[A,"Viewer",true]],
+  OtherCompany:[[B,"Owner",true]],
+  MultiCompany:[[A,"Staff",true],[B,"Viewer",true]],
+  Pending:[[A,"Staff",false]],
+};
 async function seedCore(c) {
   await c.query("SET ROLE stockwise_owner");
   await c.query(`INSERT INTO stockwise.companies(id,legal_name) VALUES($1,'Fixture A'),($2,'Fixture B')`,[A,B]);
@@ -17,9 +25,11 @@ async function seedCore(c) {
 async function seedSecurity(c) {
   await c.query(`INSERT INTO sw2_auth.companies VALUES($1,true),($2,true)`,[A,B]);
   for(const [name,identity] of Object.entries(people)) {
-    await c.query("INSERT INTO sw2_auth.identities VALUES($1,$2,$3,true)",[identity,issuer,identity]);
-    await c.query("INSERT INTO sw2_auth.memberships VALUES($1,$2,$3,true)",
-      [name==="OtherCompany"?B:A,identity,name==="OtherStaff"?"Staff":name==="OtherCompany"?"Owner":name]);
+    const active=name!=="Pending";
+    await c.query("INSERT INTO sw2_auth.identities VALUES($1,$2,$3,$4)",[identity,issuer,identity,active]);
+    for(const [company,role,membershipActive] of memberships[name])
+      await c.query("INSERT INTO sw2_auth.memberships VALUES($1,$2,$3,$4)",
+        [company,identity,role,membershipActive]);
     await c.query(`INSERT INTO sw2_auth.sessions VALUES($1,$2,clock_timestamp()+interval '1 hour',
       false,'synthetic-fixture-only',clock_timestamp())`,[session(name),identity]);
   }
