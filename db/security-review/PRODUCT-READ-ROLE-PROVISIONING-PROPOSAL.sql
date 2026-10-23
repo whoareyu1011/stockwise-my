@@ -217,7 +217,7 @@ BEGIN
        JOIN pg_catalog.pg_auth_members AS migrator_creator
          ON migrator_creator.grantor = owner_creator.grantor
        WHERE owner_creator.roleid = pg_catalog.to_regrole('stockwise_owner')
-         AND owner_creator.member = pg_catalog.to_regrole(current_user)
+          AND owner_creator.member = pg_catalog.to_regrole(current_user)
           AND owner_creator.grantor NOT IN (
             pg_catalog.to_regrole('stockwise_owner'),
             pg_catalog.to_regrole('stockwise_migrator')
@@ -242,7 +242,7 @@ BEGIN
          AND NOT operator_set.inherit_option
          AND operator_set.set_option
      )
-  ) THEN
+   THEN
     RAISE EXCEPTION 'Existing deployment membership graph/options differ from the reviewed PostgreSQL 17 setup';
   END IF;
 

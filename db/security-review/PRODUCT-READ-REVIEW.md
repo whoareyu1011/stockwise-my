@@ -22,16 +22,16 @@ the SQL or that the proposed checks pass in Supabase.
 
 | Finding | Source location | Correction/status |
 | --- | --- | --- |
-| Required database/schema authority was not explicit | `PRODUCT-READ-PROPOSAL.sql:119–145, 175–190, 828`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:129–140, 252–260, 340–345` | Added fail-closed checks for target-database CREATE on `stockwise_migrator`, absence of that privilege on protected/API roles, and grant authority for `stockwise` schema USAGE. These do not grant privileges. Target values remain unknown. |
-| Role-attribute checks omitted REPLICATION/API administration flags | `PRODUCT-READ-PROPOSAL.sql:148–180, 790–828`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:119–127, 252–276, 320–330` | Added REPLICATION checks for StockWise roles and rejected SUPERUSER, CREATEROLE, CREATEDB, and REPLICATION on standard API roles. `service_role` may retain BYPASSRLS; `anon`, `authenticated`, and `authenticator` may not. `authenticator` may be LOGIN; the other three API roles may not. Not executed. |
-| RPC/RLS use one shared membership helper | `PRODUCT-READ-PROPOSAL.sql:610–683, 697–767`; this review's “Static review and limitations” section | Clarified that multiple enforcement call sites share one authorization trust point. Focused review and negative tests remain required. |
-| Membership lifecycle lacked a database audit control | `PRODUCT-READ-PROPOSAL.sql:45–49, 610–629`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:31–36`; this review's “Latest correction” section | Explicitly blocks membership creation, role changes, deactivation, deletion, and first-Owner provisioning until an approved audit control or independently verified privileged process exists. There is no membership-write endpoint. Privileged operators can still mutate the table; the block is operational, not enforced by this SQL. |
-| Privileged operator/migrator path | `PRODUCT-READ-PROPOSAL.sql:18–33, 119–145, 351–372, 697–767`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:7–36` | Explicitly states that trusted provisioning/migration operators can exercise privileged access outside the product RPC. No claim is made that the RPC technically prevents that access. |
+| Required database/schema authority was not explicit | `PRODUCT-READ-PROPOSAL.sql:119–145, 175–190, 870`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:129–140, 285–291, 365–378` | Added fail-closed checks for target-database CREATE on `stockwise_migrator`, absence of that privilege on protected/API roles, and grant authority for `stockwise` schema USAGE. These do not grant privileges. Target values remain unknown. |
+| Role-attribute checks omitted REPLICATION/API administration flags | `PRODUCT-READ-PROPOSAL.sql:148–180, 833–853`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:119–127, 268–291, 339–363` | Added REPLICATION checks for StockWise roles and rejected SUPERUSER, CREATEROLE, CREATEDB, and REPLICATION on standard API roles. `service_role` may retain BYPASSRLS; `anon`, `authenticated`, and `authenticator` may not. `authenticator` may be LOGIN; the other three API roles may not. Not executed. |
+| RPC/RLS use one shared membership helper | `PRODUCT-READ-PROPOSAL.sql:652–737, 739–809`; this review's “Static review and limitations” section | Clarified that multiple enforcement call sites share one authorization trust point. Focused review and negative tests remain required. |
+| Membership lifecycle lacked a database audit control | `PRODUCT-READ-PROPOSAL.sql:45–49, 652–671`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:31–36`; this review's “Latest correction” section | Explicitly blocks membership creation, role changes, deactivation, deletion, and first-Owner provisioning until an approved audit control or independently verified privileged process exists. There is no membership-write endpoint. Privileged operators can still mutate the table; the block is operational, not enforced by this SQL. |
+| Privileged operator/migrator path | `PRODUCT-READ-PROPOSAL.sql:18–33, 119–145, 739–809`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:7–36` | Explicitly states that trusted provisioning/migration operators can exercise privileged access outside the product RPC. No claim is made that the RPC technically prevents that access. |
 | Actual Data API exposure and callable roles were not established | `PRODUCT-READ-PROPOSAL.sql:39–54`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:37–39`; this review's “Remaining assumptions and blockers” section | Requires independent target evidence for exposed schemas, callable roles, membership closure, and effective grants. The Dashboard configuration is not inspectable by these SQL files. |
 | PostgreSQL/Auth/Data API behavior remains unverified | `PRODUCT-READ-PROPOSAL.sql:51–77`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:58–73`; historical artifacts cited below | Version, Supabase Auth grants/identity propagation, catalog behavior, and Data API behavior remain assumptions until verified in an approved isolated or hosted target. |
-| Explicit global function-default hardening must cover each function owner | `PRODUCT-READ-PROPOSAL.sql:430–456`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:286–297, 640–648` | The product preflight now requires explicit hardening for the existing owner and both new function owners; the provisioning postflight checks the new owners. Effective target ACLs remain unverified. |
-| Helper overload and PUBLIC EXECUTE checks were incomplete | `PRODUCT-READ-PROPOSAL.sql:970–1022` | Added an exact one-function count and signature-resolution check for the private membership helper, and a catalog ACL check rejecting PUBLIC EXECUTE on either security function. Effective named-role access checks remain in place. Not executed. |
-| Provisioning preflight/postflight assumed membership-pair uniqueness and did not verify the complete role-membership graph | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:99–103, 147–213, 347–504`; `PRODUCT-READ-PROPOSAL.sql:141–355` | Revised both proposals to check grantor-specific `pg_auth_members` rows and `ADMIN`/`INHERIT`/`SET` options. The new role postflight checks the migrator's complete incoming set, rejects any membership granted by the migrator, verifies operator memberships, validates incoming edges to both new owner roles, and rejects outgoing/grantor edges involving them. These source checks are not executed. |
+| Explicit global function-default hardening must cover each function owner | `PRODUCT-READ-PROPOSAL.sql:478–510`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:323–329, 708–722` | The product preflight now requires explicit hardening for the existing owner and both new function owners; the provisioning postflight checks the new owners. Effective target ACLs remain unverified. |
+| Helper overload and PUBLIC EXECUTE checks were incomplete | `PRODUCT-READ-PROPOSAL.sql:1010–1069` | Added an exact one-function count and signature-resolution check for the private membership helper, and a catalog ACL check rejecting PUBLIC EXECUTE on either security function. Effective named-role access checks remain in place. Not executed. |
+| Provisioning preflight/postflight assumed membership-pair uniqueness and did not verify the complete role-membership graph | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:99–103, 167–246, 381–571`; `PRODUCT-READ-PROPOSAL.sql:141–390` | Revised both proposals to check grantor-specific `pg_auth_members` rows and `ADMIN`/`INHERIT`/`SET` options. The new role postflight checks the migrator's complete incoming set, rejects any membership granted by the migrator, verifies operator memberships, validates incoming edges to both new owner roles, and rejects outgoing/grantor edges involving them. These source checks are not executed. |
 
 ## Latest correction: role-membership catalog review
 
@@ -40,12 +40,15 @@ possibly transitive membership:
 
 | Invariant | Source check | Limitation |
 | --- | --- | --- |
-| `stockwise_migrator` has exactly the three expected direct role memberships, each with `ADMIN=false`, `INHERIT=false`, `SET=true`, and the reviewed grantor; it grants no role memberships | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:348–385, 455–460`; `PRODUCT-READ-PROPOSAL.sql:274–314, 205–210` | The checks reject extra roles, grantors, or option combinations and any row with `stockwise_migrator` as grantor. They have not been run against a database. |
-| The non-superuser operator-to-migrator relation preserves both grantor-specific rows: automatic creator `ADMIN` only, and the explicit operator-granted `SET` only edge | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:165–213, 463–504`; `PRODUCT-READ-PROPOSAL.sql:318–355` | This matches the historical PostgreSQL 17 role report, but the current target's grantor OIDs and options remain unknown. |
-| Each function-owner role has only the migrator's explicit `SET` edge and the creator's automatic `ADMIN`-only edge; neither protected role is a member or grantor for another role | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:388–460` | The code requires the expected grantor/options shape and aborts otherwise. The newly proposed roles have not been tested on PostgreSQL. |
+| `stockwise_migrator` has exactly the three expected direct role memberships, each with `ADMIN=false`, `INHERIT=false`, `SET=true`, and the reviewed grantor; it grants no role memberships | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:381–418, 505–510`; `PRODUCT-READ-PROPOSAL.sql:295–331, 205–210` | The checks reject extra roles, grantors, or option combinations and any row with `stockwise_migrator` as grantor. They have not been run against a database. |
+| The non-superuser operator-to-migrator relation preserves both grantor-specific rows: automatic creator `ADMIN` only, and the explicit operator-granted `SET` only edge | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:167–246, 513–571`; `PRODUCT-READ-PROPOSAL.sql:334–390` | The automatic row is correlated to the existing `stockwise_owner` creator row. The source does not identify or prove trust in that common grantor; target grantor identity/options remain unknown. |
+| Each function-owner role has only the migrator's explicit `SET` edge and the creator's automatic `ADMIN`-only edge; neither protected role is a member or grantor for another role | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:421–510` | The code correlates the creator row to the existing `stockwise_owner` creator grantor and aborts on other edges/options. This does not establish that the grantor is trusted; the new roles have not been tested on PostgreSQL. |
 
-The proposals rely on the PostgreSQL 17 catalog fields and role-membership
-options declared in `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:65–73`.
+The proposals require PostgreSQL major version 17 and use its catalog fields
+and membership options (`PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:68–75`;
+`PRODUCT-READ-PROPOSAL.sql:66–70`). They accept any 17.x minor version; the
+retained local report was from PostgreSQL 17.6. No current Supabase version was
+checked.
 `pg_auth_members` may contain multiple rows for the same `(roleid, member)` pair
 when the grantors differ; the checks retain and validate grantor-specific rows.
 `pg_has_role` is supplementary and does not establish the exact edge set. The
@@ -54,9 +57,11 @@ retained historical report documents two rows for the operator's membership in
 (`db/deployment/README.md:72–99`;
 `db/test-reports/prerequisites-postgresql17.md:103–118`). That historical run
 covered the earlier deployment-role setup, not these modified proposals or the
-current Supabase target. The new-role checks intentionally fail closed if the
-current target's creator edges differ; no membership behavior was verified in
-this task.
+current Supabase target. The new-role checks require creator rows to share the
+grantor from the existing `stockwise_owner` creator edge and fail closed if they
+differ. The source does not establish that this grantor is a trusted bootstrap
+principal; its actual role identity and authority require independent review.
+No membership behavior was verified in this task.
 
 Membership creation, role changes, deactivation, deletion, and first-Owner
 provisioning remain process-blocked only. The SQL does not install an audit
@@ -110,9 +115,12 @@ Static review of the proposal source confirmed:
 - The provisioning proposal does not grant API/runtime membership, login,
   `BYPASSRLS`, or product table access to the new roles.
 - The provisioning postflight checks the full direct membership set of
-  `stockwise_migrator`, the direct operator edge/options, the permitted incoming
-  edges to the new function-owner roles, and disallows those owner roles from
-  being members or grantors. These are checks in source only.
+  `stockwise_migrator`, rejects memberships granted by it, checks the direct
+  operator edge/options, validates incoming membership edges to the new
+  function-owner roles, and disallows those owner roles from being members or
+  grantors. Creator rows are correlated to the existing owner-role creator
+  grantor; trust in that principal remains an external review requirement.
+  These are checks in source only.
 - The privileged operator/migrator boundary remains explicit. Membership
   lifecycle changes and first-Owner provisioning are blocked by process until
   approved audit controls or independently verified privileged procedures exist.
@@ -125,16 +133,19 @@ proposed database checks and have not been run.
 
 Before any isolated database test or hosted execution:
 
-1. Confirm the target server is the reviewed PostgreSQL 17 version and supports
-   the explicit role-membership options used by the role proposal.
+1. Confirm the target server is PostgreSQL 17 and supports the explicit
+   membership options. The preflights accept any 17.x minor, while the retained
+   isolated report is specifically from 17.6; the hosted target version is
+   unknown.
 2. Verify that migration 0001 is installed exactly as expected: required tables,
    RLS enabled, expected ownership, and no unexpected existing policies.
 3. Inspect the full target role graph, creator memberships/options, role
    attributes, effective grants, function ACLs, and default ACLs. Include every
    role that can be selected by the Data API, not only the four standard names.
    The proposal intentionally aborts rather than repairing unknown access.
-   Independently verify that actual PostgreSQL 17 `pg_auth_members` rows and
-   automatic creator-membership options satisfy the stated exact expectations.
+   Independently verify every grantor-specific `pg_auth_members` row and option.
+   Confirm that the common creator grantor is the approved trusted system role;
+   the SQL correlates it across rows but does not prove its trust.
 4. Verify the approved operator can assume `stockwise_migrator`, and that the
    migrator has exactly SET-only memberships in all three object-owner roles;
    verify its target-database CREATE and `stockwise_owner`'s schema-USAGE grant
@@ -195,10 +206,11 @@ all cases below are **NOT RUN**:
 - Verify role-creation automatic memberships and every direct
   `(roleid, member, grantor)` row and `ADMIN`/`INHERIT`/`SET` option. Include
   negative cases for an extra membership, an extra grantor row, changed options,
-  membership granted by a protected function owner or migrator, and an
-  unexpected role member; each must abort and roll back. Verify role attributes,
-  the operator boundary, database CREATE, schema grant authority, and all
-  target Data API role closures.
+  mismatched creator grantors, membership granted by a protected function owner
+  or migrator, and an unexpected role member; each must abort and roll back.
+  Independently identify and approve the common creator grantor. Verify role
+  attributes, the operator boundary, database CREATE, schema grant authority,
+  and all target Data API role closures.
 - Seed harmless synthetic companies, users, memberships, and products; test
   valid/forged/missing `auth.uid()` identity, same-company reads, cross-company
   denial, forged company selectors, pending/inactive/missing memberships, and
