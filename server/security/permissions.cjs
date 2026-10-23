@@ -55,5 +55,5 @@ function grantableRoles(role) {
     role === "Admin" ? ["Staff", "Viewer"] : []);
 }
 
-module.exports = { roleAllows, resourceAllows,
+module.exports = { actions, roleAllows, resourceAllows,
   requiresOrder: action => needsOrder.has(action), grantableRoles };

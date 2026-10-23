@@ -47,7 +47,8 @@ def main():
     os.closerange(3, resource.getrlimit(resource.RLIMIT_NOFILE)[0])
     # Do not copy workspace secrets into the test process or its descendants.
     os.execve(node, [node, "--test", "--test-concurrency=1",
-                    "tests/security/security.test.cjs"],
+                    "tests/security/security.test.cjs",
+                    "tests/security/components.test.cjs"],
               {"PATH": str(Path(node).parent), "TZ": "UTC"})
 
 

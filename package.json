@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "test:server": "node --test tests/server/*.test.cjs",
+    "test:security:components": "node --test tests/security/components.test.cjs",
     "test:security:offline": "python3 tests/security/run-offline.py"
   },
   "keywords": [],

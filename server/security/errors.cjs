@@ -3,7 +3,12 @@
 // Fixed, non-secret-bearing messages. Never attach driver/JWT errors as causes.
 const messages = Object.freeze({
   AUTH_INVALID: [401, "Authentication required"],
+  AUTH_PROVIDER_UNAVAILABLE: [503, "Authentication service unavailable"],
   AUTHORIZATION_DENIED: [403, "Operation not permitted"],
+  REQUEST_INVALID: [400, "Request is invalid"],
+  RESOURCE_NOT_FOUND: [404, "Resource not found"],
+  IDEMPOTENCY_CONFLICT: [409, "Idempotency key conflicts with an earlier request"],
+  INTERNAL_ERROR: [500, "Request could not be completed"],
   SECURITY_CONFIGURATION: [503, "Security configuration unavailable"],
   SESSION_UNAVAILABLE: [503, "Session verification unavailable"],
   MEMBERSHIP_UNAVAILABLE: [503, "Authorization service unavailable"],
