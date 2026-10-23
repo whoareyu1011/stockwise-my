@@ -1,2 +1,3 @@
 - [StockWise authorization decisions](security-planning-decisions.md) — Supabase Auth, role boundaries, Viewer limits, and approved product-read fields; deployment remains unapproved.
 - [Database mutation contracts](database-mutation-contracts.md) — Database-owned idempotency and exact decimal strings are required for retries and numeric safety.
+- [Replit database runtime target](replit-database-runtime-target.md) — The managed DB tool and shell `PG*` connection target different PostgreSQL instances; verify before wiring repositories.

@@ -139,6 +139,7 @@ function createProductInventoryService({ authorize, repository } = {}) {
       throw new SecurityError("MEMBERSHIP_UNAVAILABLE");
     }
     if (!isAuthorizedContext(context, input.principal) ||
+        !isUuid(context.identityId) ||
         context.companyId !== input.companyId || context.action !== action ||
         !CODES.has(context.role)) {
       throw new SecurityError("AUTHORIZATION_DENIED");
@@ -195,6 +196,7 @@ function createProductInventoryService({ authorize, repository } = {}) {
       const context = await authorized(input, "product.write");
       return productProjection(await callRepository("createProduct", {
         companyId: context.companyId,
+        actorMembershipId: context.identityId,
         idempotencyKey,
         product,
       }), context.role);
@@ -208,6 +210,7 @@ function createProductInventoryService({ authorize, repository } = {}) {
       const context = await authorized(input, "product.write", input.productId);
       return productProjection(await callRepository("updateProduct", {
         companyId: context.companyId,
+        actorMembershipId: context.identityId,
         productId: input.productId,
         idempotencyKey,
         changes,
@@ -221,6 +224,7 @@ function createProductInventoryService({ authorize, repository } = {}) {
       const context = await authorized(input, "product.write", input.productId);
       const result = await callRepository("archiveProduct", {
         companyId: context.companyId,
+        actorMembershipId: context.identityId,
         productId: input.productId,
         idempotencyKey,
       });
@@ -241,6 +245,7 @@ function createProductInventoryService({ authorize, repository } = {}) {
       const context = await authorized(input, "stock.adjust", input.productId);
       const result = await callRepository("adjustStock", {
         companyId: context.companyId,
+        actorMembershipId: context.identityId,
         productId: input.productId,
         direction: input.direction,
         quantity: input.quantity,
@@ -249,12 +254,12 @@ function createProductInventoryService({ authorize, repository } = {}) {
       });
       if (!plainObject(result) || typeof result.movementId !== "string" ||
           !isUuid(result.movementId) ||
-          !Number.isSafeInteger(result.balanceBefore) ||
-          !Number.isSafeInteger(result.balanceAfter)) dependencyUnavailable();
+          !/^(?:0|[1-9][0-9]*)$/.test(result.balanceBefore) ||
+          !/^(?:0|[1-9][0-9]*)$/.test(result.balanceAfter)) dependencyUnavailable();
       return Object.freeze({
         movementId: result.movementId,
-        balanceBefore: result.balanceBefore,
-        balanceAfter: result.balanceAfter,
+        balanceBefore: String(result.balanceBefore),
+        balanceAfter: String(result.balanceAfter),
       });
     },
   });
