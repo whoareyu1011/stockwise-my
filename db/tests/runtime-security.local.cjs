@@ -94,7 +94,7 @@ async function main(){
           assert.equal((await admin.query("SELECT pg_has_role($1,$2,'MEMBER') b",[who,owner])).rows[0].b,false);
       assert.equal((await admin.query(`SELECT count(*)::int n FROM pg_proc p CROSS JOIN LATERAL
         aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
-        WHERE p.pronamespace IN('sw2_auth'::regnamespace,'sw2_api'::regnamespace)
+        WHERE p.pronamespace IN('stockwise'::regnamespace,'sw2_auth'::regnamespace,'sw2_api'::regnamespace)
         AND a.grantee=0 AND a.privilege_type='EXECUTE'`)).rows[0].n,0);
       assert.equal((await admin.query(`SELECT count(*)::int n FROM pg_class WHERE relkind='r'
         AND relnamespace IN('stockwise'::regnamespace,'sw2_auth'::regnamespace) AND NOT relrowsecurity`)).rows[0].n,0);
@@ -194,6 +194,8 @@ async function main(){
         const a=(await c.query("SELECT sw2_api.reverse_order($1,$2,$3,'2026-01-02','security fixture') value",[f.A,drafts.Staff,id(5001)])).rows[0].value;
         assert(a);
       });assert.equal(await f.balance(admin),"10");
+      await assert.rejects(request("Admin","order.reverse","SELECT 1",[],{resourceId:drafts.Staff}),
+        e=>e.code==="AUTHORIZATION_DENIED");
     });
     await r.check("S12 Viewer status projection only; private/missing creators fail closed for Staff",async()=>{
       const rows=await request("Viewer","order.basic.read","SELECT sw2_api.status($1,$2) value",[f.A,drafts.Staff],{resourceId:drafts.Staff});
@@ -206,6 +208,9 @@ async function main(){
       const before=await f.balance(admin),order=drafts.OtherStaff,key=id(5100);
       await request("OtherStaff","draft.cancel","SELECT sw2_api.cancel_draft($1,$2,$3,'unused')",[f.A,order,key],{resourceId:order});
       await raw("OtherStaff",async c=>{await c.query("SELECT sw2_api.cancel_draft($1,$2,$3,'unused')",[f.A,order,key]);});
+      // Known Phase 1 state mismatch, not an end-to-end retry success.
+      await assert.rejects(request("OtherStaff","draft.cancel","SELECT 1",[],{resourceId:order}),
+        e=>e.code==="AUTHORIZATION_DENIED");
       await raw("Owner",c=>sqlDenied(()=>c.query("SELECT sw2_api.post_order($1,$2,$3)",[f.A,order,id(5101)])));
       await raw("OtherStaff",c=>sqlDenied(()=>c.query("SELECT sw2_api.edit_notes($1,$2,'reopen')",[f.A,order])));
       assert.equal(await f.balance(admin),before);
@@ -269,11 +274,11 @@ async function main(){
       const second=await request("Viewer","product.basic.read",null,[],{work:async c=>
         (await c.query(`SELECT pg_backend_pid() pid,current_user role,current_setting('search_path') search_path,
           current_setting('application_name') app,to_regclass('pg_temp.pool_contamination') temp_table`)).rows[0]});
-      assert.equal(first,second[0].pid);
-      assert.equal(second[0].role,"sw2_business");
-      assert.notEqual(second[0].search_path,"pg_temp, public");
-      assert.equal(second[0].app,"stockwise_disposable_phase2");
-      assert.equal(second[0].temp_table,null);
+      assert.equal(first,second.pid);
+      assert.equal(second.role,"sw2_business");
+      assert(!second.search_path.includes("pg_temp"));
+      assert.equal(second.app,"stockwise_disposable_phase2");
+      assert.equal(second.temp_table,null);
     });
     await r.check("S18 exact definer ownership, paths, execute allowlists and column grants",async()=>{
       const owners={products:"sw2_basic_reader",quantities:"sw2_basic_reader",status:"sw2_basic_reader",
@@ -290,7 +295,7 @@ async function main(){
         assert(row.proconfig.some(v=>v.replace(/\s/g,"")==="search_path=pg_catalog,pg_temp"));}
       for(const role of ["sw2_basic_reader","sw2_sales_reader","sw2_draft_writer"])
         assert.equal((await admin.query("SELECT has_column_privilege($1,'stockwise.products','unit_cost','SELECT') b",[role])).rows[0].b,false);
-      const privileged=(await admin.query(`SELECT n.nspname,p.proname,r.rolname owner
+      const privileged=(await admin.query(`SELECT n.nspname,p.proname,p.proconfig,r.rolname owner
         FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
         JOIN pg_roles r ON r.oid=p.proowner
         WHERE p.prosecdef AND n.nspname IN ('stockwise','sw2_auth','sw2_api')
@@ -300,19 +305,56 @@ async function main(){
         const expected=row.nspname==="stockwise"?"stockwise_owner":
           row.nspname==="sw2_auth"?(row.proname==="guard_cancelled"?"stockwise_owner":"sw2_auth_owner"):owners[row.proname];
         assert.equal(row.owner,expected,`Unexpected SECURITY DEFINER owner: ${row.nspname}.${row.proname}`);
-        const conf=(await admin.query(`SELECT proconfig FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-          WHERE n.nspname=$1 AND p.proname=$2 AND p.prosecdef`,[row.nspname,row.proname])).rows[0].proconfig;
-        assert(conf.some(v=>v.replace(/\s/g,"")==="search_path=pg_catalog,pg_temp"));
+        assert(row.proconfig.some(v=>v.replace(/\s/g,"")==="search_path=pg_catalog,pg_temp"));
       }
-      const runtimeExpected=new Set(["activate","products","quantities","status","sales_products","sales_order",
-        "business_products","create_draft","edit_notes","set_line","post_order","reverse_order","cancel_draft",
-        "membership","resource","target_member","authorize","customers","work_customer","movements","audit"]);
-      const verifierExpected=new Set(["issue","session_status"]);
+      const apiSignatures=["products(uuid)","quantities(uuid)","status(uuid,uuid)","sales_products(uuid)",
+        "sales_order(uuid,uuid)","business_products(uuid)","create_draft(uuid,uuid,text,text,date)",
+        "edit_notes(uuid,uuid,text)","set_line(uuid,uuid,uuid,integer,bigint,numeric,numeric)",
+        "post_order(uuid,uuid,uuid)","reverse_order(uuid,uuid,uuid,date,text)","cancel_draft(uuid,uuid,uuid,text)",
+        "membership(uuid)","resource(uuid,uuid)","target_member(uuid,uuid)",
+        "authorize(uuid,text,uuid,text,uuid,text)","customers(uuid)","work_customer(uuid,uuid)",
+        "movements(uuid)","audit(uuid)"].map(s=>"sw2_api."+s);
+      const catalog=(await admin.query(`SELECT n.nspname,p.proname,p.prosecdef,p.proconfig,
+        pg_get_userbyid(p.proowner) owner,
+        n.nspname||'.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' signature
+        FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+        WHERE n.nspname IN ('stockwise','sw2_auth','sw2_api')`)).rows;
+      assert.deepEqual(catalog.filter(x=>x.nspname==="sw2_api").map(x=>x.signature.replace(/ /g,"")).sort(),
+        [...apiSignatures].sort());
+      const privateSignatures=["context()","member(uuid,boolean)","can_company(uuid,text)",
+        "can_work(uuid,uuid)","cancelled(uuid,uuid)","remember(uuid,uuid,text)",
+        "event(uuid,text,uuid,uuid)","session_status(text,text,uuid)",
+        "issue(text,text,uuid,integer,xid8,timestampwithtimezone)","activate(text)",
+        "revalidate_event()","cancel(uuid,uuid,uuid,text)","guard_cancelled()"];
+      const coreSignatures=["touch_updated_at()","reject_mutation()","guard_company_identity()",
+        "guard_order()","guard_order_item()","guard_balance_write()","initialize_balance()",
+        "audit_catalogue_change()","validate_movement()","apply_movement()","check_balance_integrity()",
+        "check_order_integrity()","post_order(uuid,uuid,uuid)","reverse_order(uuid,uuid,uuid,date,text)"];
+      for(const [schema,expected] of [["sw2_auth",privateSignatures],["stockwise",coreSignatures]])
+        assert.deepEqual(catalog.filter(x=>x.nspname===schema).map(x=>x.signature.replace(/ /g,"")).sort(),
+          expected.map(x=>schema+"."+x).sort());
+      const coreDefiners=new Set(["initialize_balance","audit_catalogue_change","apply_movement",
+        "check_balance_integrity","check_order_integrity","post_order","reverse_order"]);
+      for(const row of catalog){
+        assert.equal(row.prosecdef,row.nspname!=="stockwise" || coreDefiners.has(row.proname));
+        const expectedOwner=row.nspname==="stockwise"?"stockwise_owner":
+          row.nspname==="sw2_auth"?(row.proname==="guard_cancelled"?"stockwise_owner":"sw2_auth_owner"):owners[row.proname];
+        assert.equal(row.owner,expectedOwner);
+        assert.deepEqual(row.proconfig.filter(x=>x.startsWith("search_path=")).map(x=>x.replace(/\s/g,"")),
+          ["search_path=pg_catalog,pg_temp"]);
+      }
+      // Reject unexpected overloads, including private helper/trigger overloads.
+      const names=catalog.map(x=>x.nspname+"."+x.proname);
+      assert.equal(new Set(names).size,names.length);
+      const runtimeExpected=new Set([...apiSignatures,"sw2_auth.activate(text)"]);
+      const verifierExpected=new Set(["sw2_auth.issue(text,text,uuid,integer,xid8,timestampwithtimezone)",
+        "sw2_auth.session_status(text,text,uuid)"]);
       for(const [role,expected] of [["sw2_business",runtimeExpected],["sw2_issuer",verifierExpected]]){
-        const rows=(await admin.query(`SELECT n.nspname,p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+        const rows=(await admin.query(`SELECT n.nspname||'.'||p.proname||'('||oidvectortypes(p.proargtypes)||')' signature
+          FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
           WHERE n.nspname IN ('stockwise','sw2_auth','sw2_api')
             AND has_function_privilege($1,p.oid,'EXECUTE')`,[role])).rows;
-        const actual=new Set(rows.map(row=>row.nspname==="sw2_api"?row.proname:row.nspname==="sw2_auth"?row.proname:"stockwise."+row.proname));
+        const actual=new Set(rows.map(row=>row.signature.replace(/ /g,"")));
         assert.deepEqual([...actual].sort(),[...expected].sort(),`Unexpected function EXECUTE set for ${role}`);
       }
       for(const role of ["sw2_business","sw2_issuer"]){
@@ -324,6 +366,13 @@ async function main(){
       await h.denied(()=>admin.query("UPDATE sw2_auth.memberships SET role='Operator' WHERE company_id=$1 AND identity_id=$2",[f.A,f.people.Staff]),["23514"]);
       await h.denied(()=>admin.query("UPDATE sw2_auth.memberships SET role='root' WHERE company_id=$1 AND identity_id=$2",[f.A,f.people.Staff]),["23514"]);
       for(const role of ["anon","authenticated","service_role","authenticator"]){
+        assert.equal((await admin.query(`SELECT count(*)::int n FROM pg_proc p
+          WHERE p.pronamespace IN ('stockwise'::regnamespace,'sw2_auth'::regnamespace,'sw2_api'::regnamespace)
+            AND has_function_privilege($1,p.oid,'EXECUTE')`,[role])).rows[0].n,0);
+        for(const table of ["companies","products","contacts","orders","order_items","stock_balances","stock_movements","audit_logs"])
+          for(const privilege of ["SELECT","INSERT","UPDATE","DELETE","TRUNCATE","REFERENCES","TRIGGER"])
+            assert.equal((await admin.query("SELECT has_table_privilege($1,$2,$3) b",
+              [role,"stockwise."+table,privilege])).rows[0].b,false);
         await admin.query(`SET ROLE ${role}`);
         try{
           await sqlDenied(()=>admin.query("SELECT * FROM stockwise.orders"));
@@ -391,6 +440,35 @@ async function main(){
         await c.query("CREATE TEMP TABLE products(id uuid); SET LOCAL search_path=pg_temp,public");
         const rows=(await c.query("SELECT * FROM sw2_api.products($1)",[f.A])).rows;assert.equal(rows.length,2);
       });
+    });
+    await r.check("S25 multi-company identity uses the role of the selected company",async()=>{
+      const a=await request("MultiCompany","product.basic.read","SELECT sw2_api.membership($1) value",[f.A]);
+      const b=await request("MultiCompany","product.basic.read","SELECT sw2_api.membership($1) value",[f.B],{companyId:f.B});
+      assert.equal(a[0].value.role,"Staff");assert.equal(b[0].value.role,"Viewer");
+      const own=(await request("MultiCompany","draft.create",
+        "SELECT sw2_api.create_draft($1,$2,'MULTI-A','sale','2026-01-01') id",[f.A,f.C],{orderKind:"sale"}))[0].id;
+      await request("MultiCompany","draft.edit","SELECT sw2_api.edit_notes($1,$2,'own')",[f.A,own],{resourceId:own});
+      await assert.rejects(request("MultiCompany","draft.create","SELECT 1",[],{companyId:f.B,orderKind:"sale"}));
+      await raw("MultiCompany",c=>sqlDenied(()=>c.query(
+        "SELECT sw2_api.create_draft($1,$2,'MULTI-B','sale','2026-01-01')",[f.B,f.CB])));
+      await raw("MultiCompany",c=>sqlDenied(()=>c.query("SELECT sw2_api.edit_notes($1,$2,'wrong company')",[f.B,own])));
+    });
+    await r.check("S26 pending identity and disabled membership deny backend and SQL access",async()=>{
+      for(const name of ["Pending","DisabledMember"]){
+        let worked=false;
+        await assert.rejects(request(name,"product.basic.read",null,[],{work:async()=>{worked=true;}}));
+        assert.equal(worked,false);
+        await sqlDenied(()=>raw(name,c=>c.query("SELECT sw2_api.authorize($1,'product.basic.read')",[f.A])));
+      }
+    });
+    await r.check("S27 adjustments/opening stock remain unavailable through runtime",async()=>{
+      for(const name of ["Owner","Admin","Staff","Viewer"]){
+        await assert.rejects(request(name,"stock.adjust","SELECT 1"));
+        await raw(name,c=>sqlDenied(()=>c.query("SELECT sw2_api.authorize($1,'stock.adjust')",[f.A])));
+        for(const kind of ["opening_balance","adjustment_in","adjustment_out"])
+          await raw(name,c=>sqlDenied(()=>c.query(
+            "SELECT sw2_api.create_draft($1,NULL,'DEFERRED',$2,'2026-01-01')",[f.A,kind])));
+      }
     });
     await r.check("FINAL security suite ledger reconciliation",()=>h.reconcile(admin));
   }finally{if(db)await db.end();if(admin)await admin.end();r.finish();}

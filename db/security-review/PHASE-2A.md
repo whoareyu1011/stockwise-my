@@ -16,7 +16,7 @@ Existing migration/deployment SQL, application/security modules, frontend,
 startup/package configuration, health-check behavior, credentials and TLS
 certificate are unchanged. `runtime-boundary.sql` is not loaded or repurposed.
 
-## New files (no existing project files modified)
+## Review-only materials (candidate files revised; protected files unchanged)
 
 | File | Purpose |
 | --- | --- |
@@ -33,6 +33,7 @@ certificate are unchanged. `runtime-boundary.sql` is not loaded or repurposed.
 | `db/tests/run-phase2-isolated.py` | Approval-gated, environment-scrubbed, Unix-only local cluster lifecycle |
 | `db/security-review/PHASE-2A-COVERAGE.md` | Historical-scenario mapping, proposed checks and untested boundaries |
 | `db/security-review/PHASE-2A.md` | This review, decisions, risks, prerequisites and future commands |
+| `db/security-review/phase2/reviewed-source-sha256.json` | Exact source-byte snapshot, not security approval; both verification implementations require the same 26 paths |
 
 ## Architecture proposed for review
 
@@ -80,8 +81,13 @@ each public command wrapper **before idempotent early returns**.
 
 PUBLIC execution is explicitly revoked before each SQL file commits. New
 function owners also get global default EXECUTE revocation. Runtime EXECUTE is
-an explicit signature list, not an all/future-functions grant. Temporary CREATE
-rights used for ownership assignment are revoked by the final file. Future DDL
+an explicit signature list, not an all/future-functions grant. Stage 01 creates
+NOLOGIN runtime/issuer placeholders without capability membership; stage 02
+commits no runtime API EXECUTE grants. Stage 03 atomically grants the complete
+API list, memberships and LOGIN capability. No temporary schema CREATE grants
+are needed under the laboratory superuser installer. S01a checks the stopped
+installation boundary before stage 03; this is not a tested recovery mechanism.
+Future DDL
 must create as the intended function owner or explicitly revoke PUBLIC within
 the transaction: ALTER OWNER by itself does not apply that owner's defaults.
 
@@ -114,6 +120,11 @@ excluded from the ordinary request dependency graph. None is configured here.
 - Staff cannot post, adjust, reverse, mutate posted rows or gain raw ledger
   access. Owner/Admin command wrappers invoke the unchanged ledger functions.
   Direct balance/history editing remains inaccessible to runtime.
+- Adjustment/opening-stock commands are deferred for **all** runtime users,
+  including Owner/Admin. Their approved future permission is unchanged; there
+  is no current implementation. Creation and posting wrappers reject those
+  kinds, reversal rejects special-kind source orders, and SQL authorization rejects `stock.adjust`. Core mechanics tests
+  using diagnostic authority do not establish runtime adjustment authorization.
 - Cancellation is an immutable side record, not a change to the original status
   constraint. Only stock-neutral ordinary drafts qualify. Same key/reason retry
   is idempotent; another payload conflicts. Effective state is `cancelled`;
@@ -149,7 +160,10 @@ excluded from the ordinary request dependency graph. None is configured here.
    expired context must roll back data and events. Read-only operations still
    validate on each query. Audit attempt/denial logging requires a separate
    trusted sink; rolled-back SQL cannot durably log its own denial.
-7. Rollback/reset then release; discard uncertain/broken connections as Phase 1
+7. Rollback/COMMIT, then `DISCARD ALL` outside the transaction, then release.
+   The test adapter clears session settings, temporary objects, prepared
+   statements, listeners and advisory locks as well as identity context.
+   Reset failure destroys the connection; uncertain/broken connections are discarded as Phase 1
    specifies. No automatic retry after uncertain COMMIT. Explicit inventory
    40001/40P01 tests retry a **whole transaction with its original operation key**.
 8. Use separate verifier/runtime pools so a max-one business pool cannot deadlock
@@ -216,7 +230,10 @@ excluded from the ordinary request dependency graph. None is configured here.
 
 ### Exact commands proposed after separate approval
 
-Run from the repository root. **Do not run these under the current approval.**
+Run from the repository root only after a separately approved isolation fix.
+**Do not run these under the current approval. The launcher now unconditionally
+refuses execution, even with the approval flag.** These are future command
+shapes, not currently usable instructions.
 
 ```sh
 python3 db/tests/run-phase2-isolated.py \
@@ -233,7 +250,7 @@ python3 db/tests/run-phase2-isolated.py \
 ```
 
 The flag prevents accidental execution; it is **not** a substitute for approval.
-Every command creates a fresh private cluster and constructs a clean child
+The blocked lifecycle code is intended to create a fresh private cluster and construct a clean child
 environment without inheriting credentials, PostgreSQL variables, proxy settings
 or Node injection options. The launcher itself never reads secret values.
 It starts PostgreSQL only after a network-filter self-check, verifies local server
@@ -248,3 +265,101 @@ Suites stop at the first failure; all later cases are UNTESTED. There is no clai
 that the expected files already exist or that expected outcomes occurred.
 
 **Stop here. Review and separate execution approval are required next.**
+
+## Correction review: NOT READY FOR CONTROLLED LOCAL TESTING
+
+All revised scenarios remain **NOT EXECUTED**. This document describes source
+changes and future expectations, not PostgreSQL results.
+
+### Proof-issuer trust boundary
+
+`sw2_auth.issue(text,text,uuid,integer,xid8,timestamptz)` trusts the verifier
+credential's supplied issuer, subject, session and target PID/XID. The SQL
+checks active synthetic identity/session records but does not verify a JWT.
+Possession of this credential can therefore impersonate an active recorded
+identity. Separate pools in one Node process are dependency separation, not
+protection from compromised server code. The lab adapter is not a production
+issuer service.
+
+Before production, design an independently protected issuer boundary that
+verifies issuer/audience/keys and current hosted session evidence, derives
+identity only from verified tokens, and binds the target to a server-created
+transaction challenge. Business handlers must never possess the issuer/admin
+credential or accept caller-supplied identity/transaction claims as authority.
+Define credential custody, transport, replay/expiry, rate limits and denial
+logging. Those controls and hosted revocation remain unresolved release
+blockers; do not deploy the synthetic session registry as a substitute.
+
+### Retry and uncertain-commit contract (specified, not implemented)
+
+For posting, reversal and cancellation, keep one stable operation key per
+logical request. A fresh authorized transaction must resolve the existing
+receipt before enforcing first-execution state rules. Recheck current identity,
+session, membership, company, role and resource scope even on a replay. Same key
+and canonical payload returns the original result with no extra ledger/audit
+effect; changed company/resource/action/payload must not reuse that receipt.
+Record conflicts explicitly; never invent a new key to bypass a timeout.
+
+The unchanged Phase 1 predicates require `draft` for posting/cancellation and
+`posted` for reversal. The repository returns effective `cancelled` state from
+the cancellation side record. Thus all three committed transitions can block
+retries before their SQL wrappers run. SQL `authorize` repeats these state
+restrictions. Both layers need separately approved receipt-aware interfaces;
+do not simply relax state or role checks. S11/S13 include limitation probes,
+not successful full-path retry assertions.
+
+After known transaction abort (`40001`/`40P01`), bounded whole-transaction
+retry may use the original key and fresh authorization. I44/I56 deliberately
+end in insufficient-stock denial; I59/I60 specify sufficient-stock successful
+retries. After uncertain COMMIT, destroy the connection and resolve the durable
+receipt on a new authorized connection. No blind replay: unknown remains
+unknown until resolution. Actual transport failure recovery is not implemented.
+
+### Draft-creation idempotency (design only)
+
+The current create function has no request-key parameter: it is **not**
+idempotent. Proposed future storage has unique
+`(company_id, creator_identity_id, request_key)` with operation version,
+canonical payload fingerprint and resulting order ID. Include normalized kind,
+contact, reference, date and any initial lines in that payload. Fingerprint
+server-validated values, not arbitrary JSON ordering. Header, initial lines,
+creator metadata, receipt and event must commit atomically. Concurrent equal
+keys serialize on the unique receipt; same payload returns the original order,
+different payload conflicts. Replays still require current company authority
+and Staff ownership; a revoked membership cannot retrieve the prior result.
+Retain receipts for the documented retry lifetime (not yet decided), without
+allowing expired keys to silently create duplicate drafts. No new table or
+protected interface is introduced in this correction.
+
+### Static review findings and limitations
+
+- Exact type signatures now cover the API, private helper/trigger and core
+  function inventories, rejecting unexpected overloads. Effective runtime and
+  verifier EXECUTE sets are compared by schema plus complete input types.
+  API-role function and eight-table privilege denials are included.
+- Definers are checked individually for owner and fixed `pg_catalog,pg_temp`
+  search path. Qualified application references and private EXECUTE remain
+  essential: table-owner functions intentionally bypass ordinary RLS.
+- Fixed a source-level bug in the pooled-session test: its callback returns an
+  object, not a row array. Runtime behavior still requires execution.
+- The pool reset applies to business connections. The lab verifier only runs
+  fixed autocommit status/issuance calls and is released without DISCARD ALL;
+  it must never be handed to business work. Production verifier reset/error
+  handling and pooler semantics still need design and testing.
+- Removed a remaining redundant schema CREATE grant in stage 03.
+- I58 retains its existing corruption scenario; new retry cases are I59/I60.
+- Descriptor enumeration is snapshotted before closing; stdio sockets refuse
+  execution. Process checks consider cwd, command and descendants. These checks
+  cannot prove safety under PID reuse, hidden/unreadable processes, orphan
+  races, SIGKILL or host loss. Cleanup must remain fail-closed on uncertainty.
+- AF_UNIX permits local brokers/proxies and descriptor passing. The launcher
+  remains blocked; no isolation solution was installed or tested.
+- The hash manifest pins current SQL/test/Phase 1 bytes, not dependencies or
+  operating-system binaries. It is not a signature or approval: someone able
+  to modify both sources and manifest can replace the snapshot. Review changes
+  to both; refresh after any further source edits.
+
+Remaining blockers: isolation/cleanup validation, SQL compilation and effective
+privilege validation, receipt-aware protected interfaces, draft idempotency,
+hosted session authority and production issuer/deployment design. No claim of
+implemented production tenant isolation is made.

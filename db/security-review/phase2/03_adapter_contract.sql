@@ -1,6 +1,6 @@
 -- PHASE 2A REVIEW CANDIDATE. Test contract, NOT a production integration.
 BEGIN;
-GRANT CREATE ON SCHEMA sw2_auth TO stockwise_owner;
+-- Laboratory superuser assigns ownership; no temporary runtime-owner CREATE.
 GRANT SELECT(id,company_id,legal_name,contact_kind,is_active) ON stockwise.contacts TO sw2_basic_reader;
 GRANT SELECT(id,company_id,legal_name,contact_kind,is_active,email,phone,address,tin,identification_number)
   ON stockwise.contacts TO sw2_sales_reader;

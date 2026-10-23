@@ -59,7 +59,7 @@ do not present the number of groups as a new “58 passed” result.
 | 41 Purchase reversal wins sale race | I41 |
 | 42 Sale wins purchase reversal race | I42 |
 | 43 Concurrent repeated-product sales | I43 |
-| 44 REPEATABLE READ 40001 and whole-transaction retry | I44, core-mechanics suite only |
+| 44 REPEATABLE READ 40001 and whole-transaction retry | I44: retry denied for insufficient remaining stock; I59: sufficient-stock retry specification |
 | 45 Ledger/balance reconciliation | I45 + suite finals |
 | 46 Actual restricted migration installer | I46 + T26 |
 | 47 Adjustment signs and full reversal | I47 |
@@ -71,7 +71,7 @@ do not present the number of groups as a new “58 passed” result.
 | 53 Actual COMMIT rejects missing audit | I53 |
 | 54 Parent-locked draft edit wins post race | I54 |
 | 55 Post wins item-edit race | I55 |
-| 56 SERIALIZABLE 40001 whole-transaction retry | I56, core-mechanics suite only |
+| 56 SERIALIZABLE 40001 whole-transaction retry | I56: retry denied for insufficient remaining stock; I60: sufficient-stock retry specification |
 | 57 Deliberately induced 40P01 and same-key whole-transaction retry | I57 |
 | 58 Owner corruption detected at actual COMMIT | I58, nested temporary trigger; installed guards remain enabled |
 
@@ -97,9 +97,9 @@ roll back or remove their temporary trigger. No source migration is changed.
 | S08 | Forged browser company/actor/role claims ignored; foreign company/contact rejected |
 | S09 | Raw tables, balance edits, membership mutation, core/private functions and SET-role escalation denied to actual runtime LOGIN |
 | S10 | Staff posting denied; Owner posting allowed; Staff posted edits denied; balances reconciled |
-| S11 | SQL retry paths work without extra effects; existing Phase 1 post-retry denial explicitly recognized as a limitation |
+| S11 | Direct SQL post/reversal retry probes; Phase 1 post/reversal retry denial explicitly recognized as a limitation, not successful full-path replay |
 | S12 | Viewer exact ID/status allowlist; Staff cannot use missing creator metadata |
-| S13 | Cancellation audited/idempotent/terminal; no stock effect/reopening/posting |
+| S13 | Direct SQL cancellation retry, audit/stock-neutral/terminal checks; Phase 1 cancelled-state retry denial is a limitation probe |
 | S14 | Locally revoked membership/identity/company/session denies next statement |
 | S15 | Wrong PID, new XID and fabricated proof fail; next pooled transaction has no context |
 | S16 | Database rejects role/Owner/self-escalation ceilings; allowed Owner authorization receipt is not a membership mutation implementation |
@@ -111,6 +111,54 @@ roll back or remove their temporary trigger. No source migration is changed.
 | S22 | Stale synthetic observation or actual permission-denied status lookup fails before work; restore only the original narrow fixture grant |
 | S23 | Actual company-B order inaccessible from A; foreign product reference rejected |
 | S24 | Temporary spoof objects/search path do not replace qualified source objects |
+| S01a/S01b | Stopped installation after stage 02 has no usable runtime/issuer login or API grant; final stage activates atomically |
+| S17b | Session settings/temp object discarded before same-backend reuse; callback result-shape bug corrected in source |
+| S25 | MultiCompany is Staff in A, Viewer in B; own A draft edit allowed, B creation and cross-company edit denied by SQL/backend |
+| S26 | Pending identity and DisabledMember deny backend work and independent SQL authorization |
+| S27 | All four roles denied stock.adjust and adjustment/opening draft creation |
+
+S18 now compares full schema-qualified input-type signatures, checks private
+helper and core inventories for overloads, definer owner/search_path, exact
+runtime/issuer EXECUTE sets, API-role effective EXECUTE denials, and all seven
+table privileges across the eight inventory tables. Operator/unknown role
+values are rejected. These assertions are source only, **NOT EXECUTED**.
+
+I59 (repeatable read) and I60 (serializable) start with 20 units, induce 40001,
+restart the whole transaction with its original key, and expect two seven-unit
+sales, balance six, two sale movements and two posting audits. I58 remains the
+existing owner-corruption COMMIT scenario; no identifier is repurposed.
+
+## Lost-response and idempotency acceptance specifications — NOT EXECUTED
+
+The following R/D cases are **specifications, not executable harness cases**.
+They require future receipt-aware Phase 1/SQL authorization and, for drafts,
+new approved storage/interfaces. S11/S13 only probe current state-mismatch
+denials and direct SQL retries; they do not simulate network loss.
+
+| ID | Required future scenario and expected outcome |
+| --- | --- |
+| R01 | Commit posting, suppress response, retry through full authenticated path with same key/payload: original order result, one posting audit/event and one movement per original item, unchanged balance on replay |
+| R02 | Commit reversal, suppress response, retry through full path: identical reversal ID, no second reversing movement/audit/event |
+| R03 | Commit cancellation, suppress response, retry full path: original cancellation result, one cancellation event, no stock change and no reopened draft |
+| R04 | For each R01–R03, changed key payload/resource/company conflicts; revoked membership, Staff post/reverse, Viewer cancellation and another Staff's draft remain denied before receipt disclosure |
+| R05 | Unknown COMMIT outcome destroys connection; authorized receipt resolution returns committed result or known absence, otherwise remains unknown; never blindly replay or allocate a new key |
+| D01 | Two simultaneous equal draft requests produce one order/creator/event/receipt and identical returned IDs |
+| D02 | Same scoped key with changed canonical payload conflicts and leaves original draft untouched |
+| D03 | Draft commit response lost: authorized same-key resolution returns original draft, no duplicate order |
+| D04 | Failure before COMMIT rolls back draft, lines, creator, event and receipt together; known-aborted retry may create once |
+| D05 | Key scope cannot reveal another company/creator's draft; revoked membership and Viewer denied; Staff ownership checked on replay |
+| D06 | Receipt retention/expiry never silently reuses a formerly committed key; exact retention policy needs approval |
+
+Adjustment/opening stock remains deliberately unavailable to runtime, not
+implemented authorization. S27 denies creation/action; the posting wrapper
+also restricts kinds to sale/purchase. Future A01 specification: seed a
+synthetic special-kind draft using diagnostic authority, attempt each runtime
+posting wrapper, expect denial and zero balance/movement/audit changes.
+Also seed a diagnostic posted special-kind order and require runtime reversal
+denial; the candidate reversal wrapper now checks sale/purchase kind.
+Future A02: opening-stock cutoff import either uses opening balances plus
+post-cutoff transactions or replays history, never both. Import workflow and
+runtime adjustment/reversal scope require separate approval.
 
 The adapter connects to real local PostgreSQL in a future approved run; it is
 not a canned database authorization success. Its JWT key/status source is

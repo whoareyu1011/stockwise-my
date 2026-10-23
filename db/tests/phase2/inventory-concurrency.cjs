@@ -116,8 +116,8 @@ async function concurrent(root,admin,check) {
     });await qty(s,3);
   });
   for(const isolation of ["REPEATABLE READ","SERIALIZABLE"]) await check(
-    isolation==="SERIALIZABLE"?"I59 serializable 40001 then successful same-key whole-transaction retry":
-      "I58 repeatable-read 40001 then successful same-key whole-transaction retry",async()=>{
+    isolation==="SERIALIZABLE"?"I60 serializable 40001 then successful same-key whole-transaction retry":
+      "I59 repeatable-read 40001 then successful same-key whole-transaction retry",async()=>{
       const s=await scope({receiptQuantity:20}),x=await s.make("sale",[[s.p,7,1]]),
         y=await s.make("sale",[[s.p,7,1]]),key=s.key();
       await pair(async(a,b,pid)=>{

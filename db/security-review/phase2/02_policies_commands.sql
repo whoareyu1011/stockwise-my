@@ -173,7 +173,8 @@ DECLARE m record; result uuid;
 BEGIN
   SELECT * INTO STRICT m FROM sw2_auth.member(p_company,true);
   IF m.role NOT IN ('Owner','Admin') THEN RAISE EXCEPTION 'Reversal denied' USING ERRCODE='42501'; END IF;
-  PERFORM id FROM stockwise.orders WHERE company_id=p_company AND id=p_order FOR UPDATE;
+  PERFORM id FROM stockwise.orders WHERE company_id=p_company AND id=p_order
+    AND kind IN ('sale','purchase') FOR UPDATE;
   IF NOT FOUND OR sw2_auth.cancelled(p_company,p_order) THEN RAISE EXCEPTION 'Reversal denied' USING ERRCODE='42501'; END IF;
   result:=stockwise.reverse_order(p_company,p_order,p_key,p_date,p_reason);
   PERFORM sw2_auth.event(p_company,'order_reversed',result,p_key);
