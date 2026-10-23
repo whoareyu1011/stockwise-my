@@ -114,8 +114,8 @@ roll back or remove their temporary trigger. No source migration is changed.
 | S01a/S01b | Stopped installation after stage 02 has no usable runtime/issuer login or API grant; final stage activates atomically |
 | S17b | Session settings/temp object discarded before same-backend reuse; callback result-shape bug corrected in source |
 | S25 | MultiCompany is Staff in A, Viewer in B; own A draft edit allowed, B creation and cross-company edit denied by SQL/backend |
-| S26 | Pending identity and DisabledMember deny backend work and independent SQL authorization |
-| S27 | All four roles denied stock.adjust and adjustment/opening draft creation |
+| S26 | Pending identity is rejected before proof issuance; DisabledMember has an active identity/session but inactive company membership, and SQL `authorize` must independently deny it |
+| S27 | All roles are denied `stock.adjust` and deferred-kind draft creation with a valid same-company contact; Owner/Admin special-kind posting and reversal wrappers must deny without side effects |
 
 S18 now compares full schema-qualified input-type signatures, checks private
 helper and core inventories for overloads, definer owner/search_path, exact
@@ -150,15 +150,25 @@ denials and direct SQL retries; they do not simulate network loss.
 | D06 | Receipt retention/expiry never silently reuses a formerly committed key; exact retention policy needs approval |
 
 Adjustment/opening stock remains deliberately unavailable to runtime, not
-implemented authorization. S27 denies creation/action; the posting wrapper
-also restricts kinds to sale/purchase. Future A01 specification: seed a
-synthetic special-kind draft using diagnostic authority, attempt each runtime
-posting wrapper, expect denial and zero balance/movement/audit changes.
-Also seed a diagnostic posted special-kind order and require runtime reversal
-denial; the candidate reversal wrapper now checks sale/purchase kind.
+implemented authorization. S27's executable source now supplies a valid
+company-A contact for each deferred-kind creation attempt and requires SQLSTATE
+42501, so the intended kind guard—not a missing contact—is the expected denial.
+It also creates synthetic special-kind drafts through diagnostic fixture
+authority, tests the Owner/Admin posting wrappers for each deferred kind, and
+compares inventory/audit snapshots to require no effects. For reversal, it
+prepares one posted `adjustment_in` using lab authority, then requires both
+Owner/Admin wrappers to deny and leave the snapshot unchanged. These are
+executable test specifications only; **NOT EXECUTED**. Other special kinds are
+not yet prepared as posted reversal fixtures.
 Future A02: opening-stock cutoff import either uses opening balances plus
 post-cutoff transactions or replays history, never both. Import workflow and
 runtime adjustment/reversal scope require separate approval.
+
+S26's source keeps distinct assertions: the inactive `Pending` identity must
+fail during proof issuance before the raw SQL callback runs; the active
+`DisabledMember` identity must receive a valid proof, then fail the direct
+`sw2_api.authorize` membership check with SQLSTATE 42501. The backend path must
+also stop before business work. These source assertions are **NOT EXECUTED**.
 
 The adapter connects to real local PostgreSQL in a future approved run; it is
 not a canned database authorization success. Its JWT key/status source is

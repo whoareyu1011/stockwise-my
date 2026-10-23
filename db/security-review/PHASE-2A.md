@@ -348,18 +348,40 @@ protected interface is introduced in this correction.
   handling and pooler semantics still need design and testing.
 - Removed a remaining redundant schema CREATE grant in stage 03.
 - I58 retains its existing corruption scenario; new retry cases are I59/I60.
-- Descriptor enumeration is snapshotted before closing; stdio sockets refuse
-  execution. Process checks consider cwd, command and descendants. These checks
-  cannot prove safety under PID reuse, hidden/unreadable processes, orphan
-  races, SIGKILL or host loss. Cleanup must remain fail-closed on uncertainty.
-- AF_UNIX permits local brokers/proxies and descriptor passing. The launcher
-  remains blocked; no isolation solution was installed or tested.
+- Descriptor enumeration is snapshotted; any close failure aborts isolation,
+  and stdio sockets refuse execution. Process enumeration now requires readable
+  process identity, command line, executable and working directory for every
+  non-kernel process. Disappearing/unreadable entries, PID identity changes,
+  or differing complete snapshots abort cleanup; an uncertain process state
+  leaves the temporary directory for manual inspection.
+- `/proc` is not an atomic process snapshot, so repeated reads cannot prove
+  there is no spawn/exit race, orphan, PID reuse after the final scan, SIGKILL
+  or host-loss scenario. Do not authorize deletion from an incomplete or
+  uncertain observation. AF_UNIX also permits local brokers/proxies and
+  descriptor passing. The unconditional launcher block remains; no isolation
+  solution was installed or tested. Actual isolation from host Unix sockets
+  requires a separately reviewed OS-level network namespace or equivalent
+  confinement, not merely an AF_UNIX allow rule.
+- S26 now separates Pending proof-issuance denial from DisabledMember SQL
+  membership denial: the latter uses an active identity/session and requires a
+  valid proof before calling `sw2_api.authorize`. S27 uses a valid same-company
+  contact for deferred-kind draft denials, checks Owner/Admin posting denials
+  for every deferred kind, and checks reversal denial for a diagnostic posted
+  `adjustment_in` order with before/after snapshots. These are assertions in
+  unexecuted source, not database results.
 - The hash manifest pins current SQL/test/Phase 1 bytes, not dependencies or
   operating-system binaries. It is not a signature or approval: someone able
   to modify both sources and manifest can replace the snapshot. Review changes
   to both; refresh after any further source edits.
 
-Remaining blockers: isolation/cleanup validation, SQL compilation and effective
-privilege validation, receipt-aware protected interfaces, draft idempotency,
-hosted session authority and production issuer/deployment design. No claim of
-implemented production tenant isolation is made.
+**Controlled local testing remains NOT READY.** The launcher must stay blocked
+until host AF_UNIX access is prevented by a separately reviewed OS-level
+network namespace or equivalent, and cleanup behavior is reviewed under that
+confinement. The process checks now fail closed for observed uncertainty, but
+their `/proc` snapshots are not atomic and are not a substitute for OS
+confinement. The corrected S26/S27 assertions, SQL compilation and effective
+privileges remain unverified because no tests were run.
+
+Separate production blockers remain: receipt-aware protected interfaces,
+draft idempotency, hosted session authority, and production issuer/deployment
+design. No claim of implemented production tenant isolation is made.

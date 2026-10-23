@@ -84,8 +84,8 @@ def isolate_network():
         if fd > 2:
             try:
                 os.close(fd)
-            except OSError:
-                pass
+            except OSError as exc:
+                raise RuntimeError("Inherited descriptor state changed during isolation") from exc
     libraries = glob.glob("/nix/store/*-libseccomp-*/lib/libseccomp.so.2")
     if not libraries:
         raise RuntimeError("libseccomp unavailable; no fallback to unfiltered execution")
@@ -131,29 +131,73 @@ def isolate_network():
 
 
 def process_snapshot(entry):
+    """Read one process identity completely or refuse to trust the snapshot."""
     try:
-        args = (entry / "cmdline").read_bytes().split(b"\0")
-        cwd = Path(os.readlink(entry / "cwd")).resolve()
-        exe = Path(os.readlink(entry / "exe")).name
+        pid = int(entry.name)
         stat_line = (entry / "stat").read_text()
         fields = stat_line[stat_line.rfind(")") + 1:].split()
-        return {"pid": int(entry.name), "ppid": int(fields[1]), "args": args, "cwd": cwd, "exe": exe}
-    except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError, IndexError, OSError):
-        return None
+        if pid <= 0 or len(fields) <= 19:
+            raise ValueError("incomplete process stat record")
+        ppid = int(fields[1])
+        flags = int(fields[6])
+        starttime = int(fields[19])
+        if starttime <= 0:
+            raise ValueError("invalid process start time")
+        # Linux PF_KTHREAD: kernel threads have no user address space, cwd or
+        # executable. Their readable stat identity is sufficient to classify
+        # them; treating an unclassified missing link as harmless is not safe.
+        if flags & 0x00200000:
+            args, cwd, exe = [], None, None
+        else:
+            args = (entry / "cmdline").read_bytes().split(b"\0")
+            if not args or args == [b""]:
+                raise ValueError("empty command line for non-kernel process")
+            cwd = Path(os.readlink(entry / "cwd")).resolve(strict=True)
+            exe = Path(os.readlink(entry / "exe")).name
+            if not exe:
+                raise ValueError("missing executable identity")
+        # Detect PID reuse or a process disappearing while its other identity
+        # fields were read. A partial observation must never authorize cleanup.
+        final_fields = (entry / "stat").read_text()
+        final_fields = final_fields[final_fields.rfind(")") + 1:].split()
+        if len(final_fields) <= 19 or int(final_fields[19]) != starttime:
+            raise ValueError("process identity changed during inspection")
+        return {"pid": pid, "ppid": ppid, "starttime": starttime,
+                "args": args, "cwd": cwd, "exe": exe}
+    except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError,
+            IndexError, OSError) as exc:
+        raise RuntimeError(f"Process state incomplete or uncertain for PID {entry.name}") from exc
+
+
+def process_snapshot_set():
+    """Return a stable, fully readable /proc snapshot or fail closed."""
+    proc = Path("/proc")
+    try:
+        before = sorted(int(entry.name) for entry in proc.iterdir() if entry.name.isdigit())
+        snapshots = {pid: process_snapshot(proc / str(pid)) for pid in before}
+        after = sorted(int(entry.name) for entry in proc.iterdir() if entry.name.isdigit())
+        if before != after:
+            raise RuntimeError("Process table changed during enumeration")
+        # /proc is not an atomic snapshot. A second complete pass detects PID
+        # churn/reuse before the result can be used to authorize deletion.
+        confirm = {pid: process_snapshot(proc / str(pid)) for pid in after}
+        if {pid: item["starttime"] for pid, item in snapshots.items()} != {
+                pid: item["starttime"] for pid, item in confirm.items()}:
+            raise RuntimeError("Process identities changed during enumeration")
+        return confirm
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("Process table could not be completely verified") from exc
 
 
 def processes_for(data, root_pid=None):
     data = Path(data).resolve()
-    snapshots = {}
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        info = process_snapshot(entry)
-        if info:
-            snapshots[info["pid"]] = info
+    snapshots = process_snapshot_set()
+    if root_pid is not None and root_pid not in snapshots:
+        raise RuntimeError("Expected process is absent from the complete process snapshot")
     matches = set()
     for pid, info in snapshots.items():
-        cwd_inside = info["cwd"] == data or data in info["cwd"].parents
+        cwd_inside = info["cwd"] is not None and (
+            info["cwd"] == data or data in info["cwd"].parents)
         command_inside = os.fsencode(str(data)) in b"\0".join(info["args"])
         if cwd_inside or command_inside:
             matches.add(pid)
@@ -165,14 +209,14 @@ def processes_for(data, root_pid=None):
             if info["ppid"] in matches and pid not in matches:
                 matches.add(pid)
                 changed = True
-    if root_pid is not None and root_pid in snapshots:
+    if root_pid is not None:
         matches.add(root_pid)
     return sorted(matches)
 
 
 def verified_postmaster(data, pid):
     info = process_snapshot(Path("/proc") / str(pid))
-    if not info or info["exe"] != "postgres":
+    if info["exe"] != "postgres":
         return False
     base = Path(data).resolve()
     return (info["cwd"] == base or base in info["cwd"].parents

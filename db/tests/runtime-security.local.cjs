@@ -453,22 +453,70 @@ async function main(){
         "SELECT sw2_api.create_draft($1,$2,'MULTI-B','sale','2026-01-01')",[f.B,f.CB])));
       await raw("MultiCompany",c=>sqlDenied(()=>c.query("SELECT sw2_api.edit_notes($1,$2,'wrong company')",[f.B,own])));
     });
-    await r.check("S26 pending identity and disabled membership deny backend and SQL access",async()=>{
+    await r.check("S26 inactive identity and disabled membership deny at their intended layers",async()=>{
       for(const name of ["Pending","DisabledMember"]){
         let worked=false;
-        await assert.rejects(request(name,"product.basic.read",null,[],{work:async()=>{worked=true;}}));
+        await assert.rejects(request(name,"product.basic.read",null,[],{work:async()=>{worked=true;}}),
+          e=>e.code===(name==="Pending"?"AUTH_INVALID":"MEMBERSHIP_UNAVAILABLE"));
         assert.equal(worked,false);
-        await sqlDenied(()=>raw(name,c=>c.query("SELECT sw2_api.authorize($1,'product.basic.read')",[f.A])));
       }
+      // Pending is rejected by the verifier-side issuer before a proof exists;
+      // keep that expected denial separate from SQL membership authorization.
+      let pendingReachedSql=false;
+      await assert.rejects(raw("Pending",async()=>{
+        pendingReachedSql=true;
+        assert.fail("inactive identity unexpectedly received a database proof");
+      }),e=>e.code==="42501");
+      assert.equal(pendingReachedSql,false);
+      // DisabledMember has an active identity/session, so raw() must issue and
+      // activate a valid proof before this specific membership lookup is tried.
+      await raw("DisabledMember",async c=>{
+        await assert.rejects(
+          c.query("SELECT sw2_api.authorize($1,'product.basic.read')",[f.A]),
+          e=>e.code==="42501");
+      });
     });
     await r.check("S27 adjustments/opening stock remain unavailable through runtime",async()=>{
       for(const name of ["Owner","Admin","Staff","Viewer"]){
-        await assert.rejects(request(name,"stock.adjust","SELECT 1"));
-        await raw(name,c=>sqlDenied(()=>c.query("SELECT sw2_api.authorize($1,'stock.adjust')",[f.A])));
+        await assert.rejects(request(name,"stock.adjust","SELECT 1"),
+          e=>e.code==="AUTHORIZATION_DENIED");
+        await raw(name,c=>assert.rejects(
+          c.query("SELECT sw2_api.authorize($1,'stock.adjust')",[f.A]),
+          e=>e.code==="42501"));
         for(const kind of ["opening_balance","adjustment_in","adjustment_out"])
-          await raw(name,c=>sqlDenied(()=>c.query(
-            "SELECT sw2_api.create_draft($1,NULL,'DEFERRED',$2,'2026-01-01')",[f.A,kind])));
+          await raw(name,c=>assert.rejects(
+            c.query("SELECT sw2_api.create_draft($1,$2,'DEFERRED',$3,'2026-01-01')",
+              [f.A,f.C,kind]),
+            e=>e.code==="42501"));
       }
+      // Owner/Admin would otherwise be authorized for ordinary orders. Use
+      // diagnostic-only special-kind drafts with valid ledger lines so these
+      // checks isolate the SQL wrapper's deferred-kind guard.
+      for(const name of ["Owner","Admin"]){
+        for(const kind of ["opening_balance","adjustment_in","adjustment_out"]){
+          const order=await f.draft(admin,{company:f.A,contact:null,kind,
+            lines:[[f.P,1,0,0]]});
+          const before=await f.snapshot(admin);
+          await raw(name,c=>assert.rejects(
+            c.query("SELECT sw2_api.post_order($1,$2,$3)",[f.A,order,id(6100)]),
+            e=>e.code==="42501"));
+          assert.deepEqual(await f.snapshot(admin),before);
+        }
+      }
+      // Prepare one valid, posted special-kind order using laboratory authority
+      // so reversal denial reaches the wrapper's kind check for both allowed
+      // posting roles. This mutates only the disposable test database on a
+      // future approved run.
+      const postedSpecial=await f.draft(admin,{company:f.A,contact:null,kind:"adjustment_in",
+        lines:[[f.P,1,0,0]]});
+      await admin.query("SELECT stockwise.post_order($1,$2,$3)",[f.A,postedSpecial,id(6101)]);
+      const beforeReverse=await f.snapshot(admin);
+      for(const name of ["Owner","Admin"])
+        await raw(name,c=>assert.rejects(
+          c.query("SELECT sw2_api.reverse_order($1,$2,$3,'2026-01-02','deferred-kind probe')",
+            [f.A,postedSpecial,id(6102)]),
+          e=>e.code==="42501"));
+      assert.deepEqual(await f.snapshot(admin),beforeReverse);
     });
     await r.check("FINAL security suite ledger reconciliation",()=>h.reconcile(admin));
   }finally{if(db)await db.end();if(admin)await admin.end();r.finish();}
