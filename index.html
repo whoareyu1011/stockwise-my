@@ -189,6 +189,9 @@ tbody tr:last-child td{border-bottom:0}
   .invoice-paper{padding:17px}
 }
 @media print{
+  body.printing-invoice .app *{visibility:hidden!important}
+  body.printing-invoice #invoicePaper,body.printing-invoice #invoicePaper *{visibility:visible!important}
+  body.printing-invoice #invoicePaper{position:absolute;left:0;top:0;width:100%;max-width:none;margin:0;border:0;padding:0;border-radius:0}
   .sidebar,.topbar,.page-intro,.toolbar,.no-print,.notice{display:none!important}
   .main{margin:0;width:100%;padding:0}
   .page{display:none!important}.page.printing{display:block!important}
@@ -316,48 +319,61 @@ tbody tr:last-child td{border-bottom:0}
 </section>
 
 <section class="page" id="page-invoice" data-demo-only>
-  <div class="page-intro"><div><h2>E-Invoice workspace</h2><p>Prepare a draft from an existing transaction, review it, and validate required fields.</p></div></div>
-  <div class="notice warning"><strong>Important:</strong> A locally generated document is not an official Malaysian e-Invoice. Actual issuance requires the applicable LHDN MyInvois submission and validation workflow. The TIN, classification, tax and QR details below must be verified; this demo cannot submit invoices to LHDN.</div>
+  <div class="page-intro"><div><h2>Invoice records · local demo</h2><p>Create a sales invoice record or record a supplier invoice without changing stock.</p></div></div>
+  <div class="notice warning"><strong>Demo only:</strong> Records are stored in this browser and are not protected. Local checks, print-to-PDF and Gmail compose are not official MyInvois validation, submission or email delivery. Supplier files are not uploaded or stored; only their metadata is recorded.</div>
   <div class="card">
     <div class="form-grid">
-      <div class="field"><label>Choose transaction *</label><select id="invTransaction" onchange="loadInvoiceTransaction()"><option value="">Select a saved transaction</option></select></div>
-      <div class="field"><label>Document type</label><select id="invType"><option value="Invoice">Invoice</option><option value="Credit Note">Credit Note</option><option value="Debit Note">Debit Note</option><option value="Refund Note">Refund Note</option></select></div>
-      <div class="field"><label>Seller legal name *</label><input id="sellerName" placeholder="Registered business name"></div>
+      <div class="field"><label>Record type *</label><select id="invoiceMode" onchange="updateInvoiceMode()"><option value="sale">Sales invoice from a sales record</option><option value="purchase">Supplier invoice from a purchase record</option><option value="supplier_upload">Supplier invoice upload · no purchase record</option></select></div>
+      <div class="field" id="sourceTransactionField"><label id="sourceTransactionLabel">Choose sales record *</label><select id="invTransaction" onchange="loadInvoiceTransaction()"><option value="">Select a saved transaction</option></select></div>
+      <div class="field"><label>Document type</label><select id="invType" onchange="updateCorrectionField()"><option value="Invoice">Invoice</option><option value="Credit Note">Credit Note</option><option value="Debit Note">Debit Note</option><option value="Refund Note">Refund Note</option></select></div>
+      <div class="field" id="correctionField" hidden><label>Corrects local invoice *</label><select id="invCorrectionOf"><option value="">Select original local record</option></select></div>
+      <div class="field"><label>Supplier invoice number <span id="supplierNumberHint">(purchase records only)</span></label><input id="supplierInvoiceNumber" placeholder="Number printed by supplier"></div>
+      <div class="field full" id="supplierUploadField" hidden><label>Supplier invoice file</label><input id="supplierInvoiceFile" type="file" accept="application/pdf,image/*" onchange="readSupplierAttachmentMetadata()"><div class="help" id="supplierFileInfo">Optional demo attachment. The file itself stays in the browser session and is not uploaded or saved.</div></div>
+      <div class="field"><label id="sellerNameLabel">Seller legal name *</label><input id="sellerName" placeholder="Registered business name"></div>
       <div class="field"><label>Seller TIN *</label><input id="sellerTin" placeholder="Verify with LHDN"></div>
       <div class="field"><label>Seller registration number *</label><input id="sellerReg" placeholder="SSM / applicable registration"></div>
       <div class="field"><label>Seller MSIC code *</label><input id="sellerMsic" placeholder="5-digit MSIC code"></div>
       <div class="field"><label>Seller address *</label><textarea id="sellerAddress" placeholder="Registered business address"></textarea></div>
       <div class="field"><label>Seller email</label><input type="email" id="sellerEmail" placeholder="business@example.com"></div>
-      <div class="field"><label>Buyer / supplier legal name *</label><input id="buyerName" placeholder="Registered name"></div>
+      <div class="field"><label id="buyerNameLabel">Buyer / recipient legal name *</label><input id="buyerName" placeholder="Registered name"></div>
       <div class="field"><label>Buyer TIN *</label><input id="buyerTin" placeholder="Verify buyer TIN"></div>
       <div class="field"><label>Buyer registration / ID number *</label><input id="buyerReg" placeholder="Applicable registration or ID"></div>
       <div class="field"><label>Buyer email</label><input type="email" id="buyerEmail" placeholder="recipient@example.com"></div>
       <div class="field"><label>Buyer address *</label><textarea id="buyerAddress" placeholder="Buyer address"></textarea></div>
       <div class="field"><label>Currency</label><select id="invCurrency"><option value="MYR">MYR — Malaysian Ringgit</option></select></div>
+      <div class="field"><label>Invoice-level discount (RM)</label><input type="number" id="invDiscount" min="0" step="0.01" value="0"></div>
+      <div class="field"><label>Additional charges (RM)</label><input type="number" id="invCharges" min="0" step="0.01" value="0"></div>
+      <div class="field"><label>Rounding adjustment (RM)</label><input type="number" id="invRounding" step="0.01" value="0"></div>
       <div class="field"><label>Payment status *</label><select id="invPayment"><option value="">Select status</option><option>Paid</option><option>Partially paid</option><option>Unpaid</option></select></div>
-      <div class="field"><label>Payment amount received / paid (RM) *</label><input type="number" id="invPaid" min="0" step="0.01" placeholder="0.00"></div>
+      <div class="field"><label>Payment amount received / paid (RM)</label><input type="number" id="invPaid" min="0" step="0.01" value="0"></div>
       <div class="field"><label>Payment method</label><select id="invMethod"><option value="">Not specified</option><option>Cash</option><option>Bank transfer</option><option>Card</option><option>E-wallet</option><option>Other</option></select></div>
     </div>
+    <div id="manualInvoiceLines" style="display:none;margin-top:20px">
+      <div class="card-head"><div><h3>Supplier invoice items</h3><p>Enter the lines shown on the supplier document. No stock is changed.</p></div><button class="btn small" onclick="addManualInvoiceLine()">＋ Add line</button></div>
+      <div id="manualInvoiceLineList"></div>
+    </div>
+    <div id="invoiceLineEditor" style="margin-top:20px"></div>
+    <div class="help">Tax categories are placeholders, not official MyInvois codes. Enter rates only for a local estimate. Tax is rounded per line to two decimals and then summed; this demo does not submit or verify tax treatment.</div>
     <div class="form-actions"><button class="btn" onclick="clearInvoiceFields()">Clear invoice details</button><button class="btn primary" onclick="previewInvoice()">Validate & preview →</button></div>
   </div>
   <div id="invoicePreviewArea" style="display:none;margin-top:20px">
     <div class="card" style="margin-bottom:16px">
-      <div class="card-head"><div><h3>Validation checklist</h3><p>Resolve every blocking item before official submission.</p></div><span class="pill amber" id="validationBadge">Draft only</span></div>
+      <div class="card-head"><div><h3>Local validation checklist</h3><p>Resolve local blocking items before saving this record.</p></div><span class="pill amber" id="validationBadge">Draft only</span></div>
       <div id="validationResults"></div>
       <div class="help">Passing this local checklist does not guarantee LHDN acceptance. Validation must be performed against the latest MyInvois schema, business rules and tax requirements.</div>
-      <div class="form-actions"><button class="btn" onclick="window.print()">Print / save PDF</button><button class="btn" onclick="downloadInvoiceJSON()">Export draft JSON</button><button class="btn primary" onclick="confirmInvoice()">Confirm draft</button></div>
+      <div class="form-actions"><button class="btn" onclick="printInvoice()">Print / save PDF</button><button class="btn" onclick="downloadInvoiceJSON()">Export local record JSON</button><button class="btn primary" onclick="confirmInvoice()">Save local record</button></div>
     </div>
     <div id="invoicePaper" class="invoice-paper"></div>
     <div class="card" style="margin-top:15px">
-      <h3 style="font-size:14px">Sending to recipient</h3>
-      <p class="help">Email sending is not configured. Download the draft, verify the final invoice and use your business email. Production email should send only the recipient's document after permission and address checks.</p>
-      <div class="toolbar"><button class="btn" onclick="emailInvoice()">Prepare email draft</button><button class="btn" onclick="downloadInvoiceHTML()">Download invoice HTML</button></div>
+      <h3 style="font-size:14px">Gmail compose</h3>
+      <p class="help">A compose window opens only. Nothing is sent, and the PDF is not attached automatically; attach it yourself after reviewing the draft.</p>
+      <div class="toolbar"><button class="btn" onclick="emailInvoice()">Open Gmail compose</button><button class="btn" onclick="downloadInvoiceHTML()">Download invoice HTML</button></div>
       <div class="help" id="emailStatus"></div>
     </div>
   </div>
   <div class="card" style="margin-top:18px">
-    <div class="card-head"><div><h3>Prepared invoice drafts</h3><p>Drafts created in this browser.</p></div></div>
-    <div class="table-wrap"><table><thead><tr><th>Draft ID</th><th>Transaction</th><th>Recipient</th><th>Amount</th><th>Status</th></tr></thead><tbody id="invoiceHistoryBody"></tbody></table></div>
+    <div class="card-head"><div><h3>Local invoice records</h3><p>Records stored in this browser only.</p></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Internal number</th><th>Type / source</th><th>Counterparty</th><th>Amount</th><th>Status</th></tr></thead><tbody id="invoiceHistoryBody"></tbody></table></div>
   </div>
 </section>
 </main>
@@ -507,7 +523,7 @@ function navigate(page){
   document.getElementById("pageTitle").textContent=names[page]||"StockWise MY";
   if(page==="inventory")renderInventory();
   if(page==="history")renderHistory();
-  if(page==="invoice"){refreshInvoiceTransactions();renderInvoiceHistory()}
+  if(page==="invoice"){refreshInvoiceTransactions();updateCorrectionField();renderInvoiceLineEditor();renderInvoiceHistory()}
   window.scrollTo({top:0,behavior:"smooth"});
 }
 document.querySelectorAll(".nav").forEach(b=>b.addEventListener("click",()=>navigate(b.dataset.page)));
@@ -796,37 +812,183 @@ function showHistoryDetail(id){
 }
 
 /* E-INVOICE DRAFT WORKFLOW */
+let manualInvoiceLines=[];
+let supplierAttachmentMetadata=null;
+const LOCAL_TAX_TYPES=[
+  ["DEMO_TAXABLE","Taxable · demo category"],
+  ["DEMO_NOT_APPLICABLE","Not applicable · demo category"]
+];
+const roundMoney=value=>Math.round((Number(value)+Number.EPSILON)*100)/100;
+const safeNumber=value=>{
+  const n=Number(value);
+  return Number.isFinite(n)?n:NaN;
+};
+function currentInvoiceMode(){return document.getElementById("invoiceMode").value}
 function refreshInvoiceTransactions(){
-  const el=document.getElementById("invTransaction"),old=el.value;
-  el.innerHTML='<option value="">Select a saved transaction</option>'+db.transactions.slice().sort((a,b)=>b.date.localeCompare(a.date)).map(t=>`<option value="${esc(t.id)}">${esc(t.ref)} · ${esc(t.party)} · ${money(t.total)}</option>`).join("");
-  if(db.transactions.some(t=>t.id===old))el.value=old;
+  const el=document.getElementById("invTransaction"),old=el.value,mode=currentInvoiceMode();
+  const allowedType=mode==="sale"?"sale":"purchase";
+  const choices=db.transactions.filter(t=>t.type===allowedType);
+  el.innerHTML='<option value="">Select a saved transaction</option>'+choices.slice().sort((a,b)=>b.date.localeCompare(a.date)).map(t=>`<option value="${esc(t.id)}">${esc(t.ref)} · ${esc(t.party)} · ${money(t.total)}</option>`).join("");
+  if(choices.some(t=>t.id===old))el.value=old;
+}
+function updateInvoiceMode(){
+  const mode=currentInvoiceMode(),upload=mode==="supplier_upload",purchase=mode!=="sale";
+  document.getElementById("sourceTransactionField").hidden=upload;
+  document.getElementById("sourceTransactionLabel").textContent=mode==="sale"?"Choose sales record *":"Choose purchase record *";
+  document.getElementById("supplierUploadField").hidden=!upload;
+  document.getElementById("supplierNumberHint").textContent=purchase?"(required for supplier records)":"(purchase records only)";
+  document.getElementById("sellerNameLabel").textContent=purchase?"Supplier legal name *":"Seller legal name *";
+  document.getElementById("buyerNameLabel").textContent=purchase?"Your business legal name *":"Buyer / recipient legal name *";
+  document.getElementById("manualInvoiceLines").style.display=upload?"block":"none";
+  if(upload&&!manualInvoiceLines.length)addManualInvoiceLine();
+  refreshInvoiceTransactions();
+  renderManualInvoiceLines();
+  renderInvoiceLineEditor();
+  document.getElementById("invoicePreviewArea").style.display="none";
+  currentInvoice=null;
+}
+function updateCorrectionField(){
+  const type=document.getElementById("invType").value;
+  const field=document.getElementById("correctionField"),select=document.getElementById("invCorrectionOf");
+  field.hidden=type==="Invoice";
+  const records=db.invoices.filter(x=>x&&x.status&&String(x.status).includes("Confirmed")&&(!x.docType||x.docType==="Invoice"));
+  select.innerHTML='<option value="">Select original local record</option>'+records.map(x=>
+    `<option value="${esc(x.id)}">${esc(x.internalNumber||x.id)} · ${esc(x.seller?.name||"")} → ${esc(x.buyer?.name||"")}</option>`).join("");
 }
 function loadInvoiceTransaction(){
   const tx=db.transactions.find(t=>t.id===document.getElementById("invTransaction").value);
-  if(!tx)return;
-  document.getElementById("buyerName").value=tx.party;
-  document.getElementById("invPaid").value=tx.paymentStatus==="Paid"?tx.total:"";
+  if(!tx){currentInvoice=null;document.getElementById("invoicePreviewArea").style.display="none";renderInvoiceLineEditor();return}
+  if(currentInvoiceMode()==="sale"){
+    document.getElementById("buyerName").value=tx.party;
+    document.getElementById("sellerName").value=db.settings.businessName||"";
+  }else{
+    document.getElementById("sellerName").value=tx.party;
+    document.getElementById("buyerName").value=db.settings.businessName||"";
+  }
+  document.getElementById("invPaid").value=tx.paymentStatus==="Paid"?roundMoney(tx.total):"0";
+  document.getElementById("invPayment").value=tx.paymentStatus||"";
   currentInvoice=null;
   document.getElementById("invoicePreviewArea").style.display="none";
+  renderInvoiceLineEditor();
 }
 function clearInvoiceFields(){
-  ["sellerName","sellerTin","sellerReg","sellerMsic","sellerAddress","sellerEmail","buyerName","buyerTin","buyerReg","buyerEmail","buyerAddress","invPaid"].forEach(id=>document.getElementById(id).value="");
+  ["sellerName","sellerTin","sellerReg","sellerMsic","sellerAddress","sellerEmail","buyerName","buyerTin","buyerReg","buyerEmail","buyerAddress","supplierInvoiceNumber"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("invPaid").value="0";document.getElementById("invDiscount").value="0";document.getElementById("invCharges").value="0";document.getElementById("invRounding").value="0";
   document.getElementById("invPayment").value="";document.getElementById("invMethod").value="";
+  document.getElementById("supplierInvoiceFile").value="";supplierAttachmentMetadata=null;
+  document.getElementById("supplierFileInfo").textContent="Optional demo attachment. The file itself stays in the browser session and is not uploaded or saved.";
+  manualInvoiceLines=[];if(currentInvoiceMode()==="supplier_upload")addManualInvoiceLine();
   document.getElementById("invoicePreviewArea").style.display="none";currentInvoice=null;
+  renderInvoiceLineEditor();
+}
+function readSupplierAttachmentMetadata(){
+  const file=document.getElementById("supplierInvoiceFile").files?.[0],info=document.getElementById("supplierFileInfo");
+  if(!file){supplierAttachmentMetadata=null;info.textContent="No file selected.";return}
+  if(file.size>8*1024*1024){document.getElementById("supplierInvoiceFile").value="";supplierAttachmentMetadata=null;info.textContent="File exceeds the 8 MB demo limit.";return}
+  supplierAttachmentMetadata={name:file.name,type:file.type||"application/octet-stream",size:file.size,lastModified:file.lastModified};
+  info.textContent=`Selected ${file.name} (${Math.ceil(file.size/1024)} KB). File contents are not uploaded or stored.`;
+}
+function addManualInvoiceLine(){
+  manualInvoiceLines=readManualInvoiceLinesFromForm();
+  manualInvoiceLines.push({description:"",qty:1,price:0,discount:0,taxType:"DEMO_NOT_APPLICABLE",taxRate:0});
+  renderManualInvoiceLines();
+}
+function removeManualInvoiceLine(index){
+  manualInvoiceLines=readManualInvoiceLinesFromForm();
+  if(manualInvoiceLines.length<=1){toast("Keep at least one invoice line.");return}
+  manualInvoiceLines.splice(index,1);renderManualInvoiceLines();
+}
+function readManualInvoiceLinesFromForm(){
+  return manualInvoiceLines.map((line,index)=>{
+    const row=document.querySelector(`[data-manual-line="${index}"]`);
+    if(!row)return {...line};
+    return {
+      description:row.querySelector('[data-field="description"]')?.value.trim()||"",
+      qty:safeNumber(row.querySelector('[data-field="qty"]')?.value),
+      price:safeNumber(row.querySelector('[data-field="price"]')?.value),
+      discount:safeNumber(row.querySelector('[data-field="discount"]')?.value),
+      taxType:row.querySelector('[data-field="taxType"]')?.value||"DEMO_NOT_APPLICABLE",
+      taxRate:safeNumber(row.querySelector('[data-field="taxRate"]')?.value)
+    };
+  });
+}
+function renderManualInvoiceLines(){
+  const host=document.getElementById("manualInvoiceLineList");
+  if(!host)return;
+  const taxOptions=(selected)=>LOCAL_TAX_TYPES.map(([code,label])=>`<option value="${code}" ${code===selected?"selected":""}>${label}</option>`).join("");
+  host.innerHTML=manualInvoiceLines.map((line,index)=>`<div class="product-line invoice-manual-line" data-manual-line="${index}" style="grid-template-columns:minmax(140px,2fr) 70px 100px 100px minmax(145px,1fr) 85px 34px">
+    <div class="field"><label>Description</label><input data-field="description" value="${esc(line.description)}" maxlength="300"></div>
+    <div class="field"><label>Qty</label><input data-field="qty" type="number" min="0.00001" step="0.00001" value="${esc(line.qty)}"></div>
+    <div class="field"><label>Unit price</label><input data-field="price" type="number" min="0" step="0.000001" value="${esc(line.price)}"></div>
+    <div class="field"><label>Discount</label><input data-field="discount" type="number" min="0" step="0.01" value="${esc(line.discount)}"></div>
+    <div class="field"><label>Tax type</label><select data-field="taxType">${taxOptions(line.taxType)}</select></div>
+    <div class="field"><label>Tax rate %</label><input data-field="taxRate" type="number" min="0" step="0.01" value="${esc(line.taxRate)}"></div>
+    <button class="remove-line" type="button" aria-label="Remove line" onclick="removeManualInvoiceLine(${index})">×</button>
+  </div>`).join("");
+}
+function renderInvoiceLineEditor(){
+  const host=document.getElementById("invoiceLineEditor");
+  if(!host)return;
+  const mode=currentInvoiceMode(),tx=db.transactions.find(t=>t.id===document.getElementById("invTransaction").value);
+  if(mode==="supplier_upload"){host.innerHTML="";return}
+  if(!tx){host.innerHTML='<div class="empty">Select a record to review invoice lines.</div>';return}
+  const taxOptions=(selected)=>LOCAL_TAX_TYPES.map(([code,label])=>`<option value="${code}" ${code===(selected||"DEMO_NOT_APPLICABLE")?"selected":""}>${label}</option>`).join("");
+  host.innerHTML=`<div class="table-wrap"><table><thead><tr><th>SKU / description</th><th>Qty</th><th>Unit price</th><th>Line discount</th><th>Tax type</th><th>Tax rate %</th></tr></thead><tbody>${tx.lines.map((line,index)=>`<tr>
+    <td>${esc(line.sku)} · ${esc(line.name)}</td><td>${esc(line.qty)}</td><td>${money(line.price)}</td><td>${money(line.discount||0)}</td>
+    <td><select data-source-tax="${index}">${taxOptions("DEMO_NOT_APPLICABLE")}</select></td>
+    <td><input data-source-rate="${index}" type="number" min="0" step="0.01" value="0" style="width:90px"></td>
+  </tr>`).join("")}</tbody></table></div><div class="help">Enter only a tax type and rate confirmed for this transaction. Rates are not inferred by this demo.</div>`;
 }
 function invoiceData(){
-  const tx=db.transactions.find(t=>t.id===document.getElementById("invTransaction").value);
+  const mode=currentInvoiceMode();
+  const tx=mode==="supplier_upload"?null:db.transactions.find(t=>t.id===document.getElementById("invTransaction").value);
+  let lines=[];
+  if(mode==="supplier_upload"){
+    lines=readManualInvoiceLinesFromForm();
+  }else if(tx){
+    lines=tx.lines.map((line,index)=>({...line,description:line.name,taxType:document.querySelector(`[data-source-tax="${index}"]`)?.value||"DEMO_NOT_APPLICABLE",
+      taxRate:safeNumber(document.querySelector(`[data-source-rate="${index}"]`)?.value||0)}));
+  }
+  const totals=calculateInvoiceTotals(lines,{
+    discount:safeNumber(document.getElementById("invDiscount").value),
+    charges:safeNumber(document.getElementById("invCharges").value),
+    rounding:safeNumber(document.getElementById("invRounding").value),
+    paid:safeNumber(document.getElementById("invPaid").value)
+  });
   return {
-    tx,docType:document.getElementById("invType").value,
+    tx,mode,sourceTransactionId:tx?.id||null,sourceReference:tx?.ref||null,
+    docType:document.getElementById("invType").value,correctsInvoiceId:document.getElementById("invCorrectionOf").value||null,
+    supplierInvoiceNumber:document.getElementById("supplierInvoiceNumber").value.trim(),
+    attachment:supplierAttachmentMetadata?{...supplierAttachmentMetadata}:null,lines,totals,
     seller:{name:document.getElementById("sellerName").value.trim(),tin:document.getElementById("sellerTin").value.trim(),reg:document.getElementById("sellerReg").value.trim(),msic:document.getElementById("sellerMsic").value.trim(),address:document.getElementById("sellerAddress").value.trim(),email:document.getElementById("sellerEmail").value.trim()},
     buyer:{name:document.getElementById("buyerName").value.trim(),tin:document.getElementById("buyerTin").value.trim(),reg:document.getElementById("buyerReg").value.trim(),address:document.getElementById("buyerAddress").value.trim(),email:document.getElementById("buyerEmail").value.trim()},
     currency:document.getElementById("invCurrency").value,payment:document.getElementById("invPayment").value,
-    paid:document.getElementById("invPaid").value,method:document.getElementById("invMethod").value
+    paid:safeNumber(document.getElementById("invPaid").value),method:document.getElementById("invMethod").value
   };
+}
+function calculateInvoiceTotals(lines,extra){
+  const normalized=lines.map(line=>{
+    const gross=roundMoney(line.qty*line.price),net=roundMoney(gross-line.discount);
+    const tax= line.taxType==="DEMO_NOT_APPLICABLE"?0:roundMoney(net*line.taxRate/100);
+    return {...line,gross,net,tax,lineTotal:roundMoney(net+tax)};
+  });
+  const subtotal=roundMoney(normalized.reduce((sum,line)=>sum+line.net,0));
+  const taxTotal=roundMoney(normalized.reduce((sum,line)=>sum+line.tax,0));
+  const discount=extra.discount,charges=extra.charges,rounding=extra.rounding,paid=extra.paid;
+  const totalExcludingTax=roundMoney(subtotal-discount+charges);
+  const totalIncludingTax=roundMoney(totalExcludingTax+taxTotal);
+  const payable=roundMoney(totalIncludingTax+rounding);
+  return {lines:normalized,subtotal,discount,charges,taxTotal,totalExcludingTax,totalIncludingTax,rounding,payable,paid,balance:roundMoney(payable-paid)};
 }
 function validateInvoice(d){
   const errors=[];
-  if(!d.tx)errors.push("Select a saved transaction.");
+  if(d.mode!=="supplier_upload"&&!d.tx)errors.push("Select a saved transaction.");
+  if(d.mode==="sale"&&d.tx?.type!=="sale")errors.push("A sales invoice must use a sales record.");
+  if(d.mode==="purchase"&&d.tx?.type!=="purchase")errors.push("A supplier invoice record must use a purchase record.");
+  if(d.mode!=="sale"&&!d.supplierInvoiceNumber)errors.push("Enter the supplier's invoice number.");
+  if(d.mode==="supplier_upload"&&!d.lines.length)errors.push("Add at least one supplier invoice line.");
+  if(d.mode==="supplier_upload"&&!d.attachment)errors.push("Select the supplier invoice file or use a purchase record instead.");
+  if(d.docType!=="Invoice"&&!d.correctsInvoiceId)errors.push("Select the original local invoice being corrected.");
   if(!d.seller.name)errors.push("Enter the seller's legal name.");
   if(!d.seller.tin)errors.push("Enter and verify the seller's TIN.");
   if(!d.seller.reg)errors.push("Enter the seller's registration number.");
@@ -837,76 +999,134 @@ function validateInvoice(d){
   if(!d.buyer.reg)errors.push("Enter the buyer's applicable registration / ID number.");
   if(!d.buyer.address)errors.push("Enter the buyer's address.");
   if(!d.payment)errors.push("Select the payment status.");
-  if(d.paid===""||!Number.isFinite(Number(d.paid))||Number(d.paid)<0)errors.push("Enter a valid amount received / paid.");
-  if(d.tx&&Number(d.paid)>d.tx.total+0.005)errors.push("Payment amount cannot exceed this transaction total in this basic workflow.");
+  if(!Number.isFinite(d.paid)||d.paid<0)errors.push("Enter a valid amount received / paid.");
+  if(!Number.isFinite(d.totals.discount)||d.totals.discount<0||d.totals.discount>d.totals.subtotal)errors.push("Invoice-level discount must be between zero and the subtotal.");
+  if(!Number.isFinite(d.totals.charges)||d.totals.charges<0)errors.push("Enter a valid non-negative additional charge.");
+  if(!Number.isFinite(d.totals.rounding))errors.push("Enter a valid rounding adjustment.");
+  if(d.paid>d.totals.payable+0.005)errors.push("Payment amount cannot exceed the invoice payable amount.");
+  if(d.payment==="Paid"&&Math.abs(d.paid-d.totals.payable)>0.005)errors.push("For Paid status, the paid amount must equal the payable total.");
+  if(d.payment==="Partially paid"&&(d.paid<=0||d.paid>=d.totals.payable))errors.push("Partially paid status requires an amount above zero and below the payable total.");
+  if(d.payment==="Unpaid"&&d.paid!==0)errors.push("For Unpaid status, the paid amount must be zero.");
+  if(d.mode==="sale"&&d.tx&&db.invoices.some(x=>(x?.mode==="sale"||(!x?.mode&&x?.tx?.type==="sale"))&&
+     (x?.sourceTransactionId===d.tx.id||x?.tx?.id===d.tx.id)&&x?.docType==="Invoice"))errors.push("This sales record already has a local sales invoice.");
+  if(d.docType!=="Invoice"&&!db.invoices.some(x=>x?.id===d.correctsInvoiceId&&(!x.docType||x.docType==="Invoice")&&String(x.status||"").includes("Confirmed")))errors.push("Select a confirmed original invoice as the correction reference.");
+  d.lines.forEach((line,index)=>{
+    if(!line.description||!Number.isFinite(line.qty)||line.qty<=0||!Number.isFinite(line.price)||line.price<0)errors.push(`Invoice line ${index+1} needs a description, positive quantity and valid unit price.`);
+    if(!Number.isFinite(line.discount)||line.discount<0||line.discount>roundMoney(line.qty*line.price))errors.push(`Invoice line ${index+1} has an invalid discount.`);
+    if(!LOCAL_TAX_TYPES.some(([code])=>code===line.taxType))errors.push(`Invoice line ${index+1} has an unknown tax type.`);
+    if(!Number.isFinite(line.taxRate)||line.taxRate<0||(line.taxType==="DEMO_NOT_APPLICABLE"&&line.taxRate!==0)||(line.taxType==="DEMO_TAXABLE"&&line.taxRate<=0))errors.push(`Invoice line ${index+1} needs a valid rate for its selected demo tax category.`);
+  });
+  if(!Number.isFinite(d.totals.payable)||d.totals.payable<0)errors.push("Calculated payable total cannot be negative.");
+  if(d.lines.some(l=>l.taxType==="DEMO_TAXABLE"&&l.taxRate>0)&&(d.totals.discount>0||d.totals.charges>0))errors.push("This demo does not allocate invoice-level discounts or charges across taxable lines. Use line-level amounts or zero those fields.");
   if(d.buyer.email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.buyer.email))errors.push("Check the buyer email format.");
   if(d.seller.email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.seller.email))errors.push("Check the seller email format.");
-  if(d.tx&&d.tx.lines.some(l=>!l.sku||!l.name||!Number.isFinite(l.qty)||!Number.isFinite(l.price)))errors.push("One or more transaction lines are incomplete.");
   return errors;
 }
 function previewInvoice(){
   const d=invoiceData(),errors=validateInvoice(d);
-  if(!d.tx){toast("Select a saved transaction first.");return}
-  currentInvoice={...d,errors,id:uid("DRAFT"),status:"Draft",createdAt:new Date().toISOString()};
+  if(d.mode!=="supplier_upload"&&!d.tx){toast("Select a saved transaction first.");return}
+  if(d.mode==="supplier_upload"&&!d.lines.length){toast("Add at least one supplier invoice line.");return}
+  currentInvoice={...d,errors,id:uid("LOCAL"),status:"Draft",createdAt:new Date().toISOString(),events:[{type:"local_validation",at:new Date().toISOString(),result:errors.length?"needs_review":"passed"}]};
   document.getElementById("invoicePreviewArea").style.display="block";
   document.getElementById("validationBadge").className="pill "+(errors.length?"amber":"green");
-  document.getElementById("validationBadge").textContent=errors.length?errors.length+" item(s) to check":"Local checks passed";
+  document.getElementById("validationBadge").textContent=errors.length?errors.length+" item(s) to check":"Local checks passed · not official";
   document.getElementById("validationResults").innerHTML=errors.length?`<ul style="font-size:12px;line-height:2;color:var(--red)">${errors.map(e=>`<li>${esc(e)}</li>`).join("")}</ul>`:`<div class="notice success">Required fields in the local checklist are filled. Official MyInvois validation is still required.</div>`;
   renderInvoicePaper(currentInvoice);document.getElementById("invoicePreviewArea").scrollIntoView({behavior:"smooth",block:"start"});
 }
 function renderInvoicePaper(d){
   const t=d.tx;
+  const lines=d.totals.lines;
   document.getElementById("invoicePaper").innerHTML=`
     <div class="invoice-top"><div><h2>${esc(d.seller.name||"Seller business name")}</h2><div class="invoice-meta">${esc(d.seller.address||"Seller address not provided")}<br>TIN: ${esc(d.seller.tin||"Not provided")}<br>Registration: ${esc(d.seller.reg||"Not provided")}<br>MSIC: ${esc(d.seller.msic||"Not provided")}</div></div>
-    <div style="text-align:right"><h2>${esc(d.docType)} <span style="font-size:12px;color:#718096">DRAFT</span></h2><div class="invoice-meta">Draft ID: ${esc(d.id)}<br>Transaction: ${esc(t.ref)}<br>Transaction date: ${esc(t.date)}<br>Currency: ${esc(d.currency)}</div><div class="qr-placeholder" style="margin:12px 0 0 auto">Official QR<br>available after<br>MyInvois validation</div></div></div>
+    <div style="text-align:right"><h2>${esc(d.docType)} <span style="font-size:12px;color:#718096">LOCAL DEMO</span></h2><div class="invoice-meta">Internal number: ${esc(d.internalNumber||"Assigned when saved")}<br>Record ID: ${esc(d.id)}<br>Source: ${esc(t?.ref||"Uploaded supplier document")}<br>Date: ${esc(t?.date||today())}<br>${d.supplierInvoiceNumber?`Supplier invoice no.: ${esc(d.supplierInvoiceNumber)}<br>`:""}Currency: ${esc(d.currency)}</div><div class="qr-placeholder" style="margin:12px 0 0 auto">No official QR<br>or MyInvois ID</div></div></div>
     <h4>BUYER / RECIPIENT</h4><div class="invoice-meta">${esc(d.buyer.name||"Not provided")}<br>${esc(d.buyer.address||"Address not provided")}<br>TIN: ${esc(d.buyer.tin||"Not provided")}<br>Registration / ID: ${esc(d.buyer.reg||"Not provided")}</div>
-    <h4>ITEM DETAILS</h4><div class="table-wrap"><table><thead><tr><th>SKU</th><th>Description</th><th>Qty</th><th>Unit price</th><th>Discount</th><th>Total</th></tr></thead><tbody>${t.lines.map(l=>`<tr><td>${esc(l.sku)}</td><td>${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.discount)}</td><td>${money(l.qty*l.price-l.discount)}</td></tr>`).join("")}</tbody></table></div>
-    <div class="invoice-total">Subtotal: ${money(t.subtotal)}<br>Discount: ${money(t.discount)}<br><span style="font-size:19px">Total: ${money(t.total)}</span><br><span style="font-size:11px;font-weight:500;color:#718096">Payment: ${esc(d.payment||"Not specified")} · Amount paid: ${money(Number(d.paid||0))}</span><br><span style="font-size:11px;font-weight:500;color:#718096">Balance: ${money(Math.max(0,t.total-Number(d.paid||0)))}</span></div>
-    <div style="margin-top:28px;padding-top:15px;border-top:1px solid #e5e9f2;font-size:10px;color:#718096;line-height:1.7">DRAFT — NOT AN OFFICIAL VALIDATED MALAYSIAN E-INVOICE. No LHDN submission ID, validation timestamp or official QR has been issued. Verify applicable tax and classification details before issuing.</div>`;
+    <h4>ITEM DETAILS</h4><div class="table-wrap"><table><thead><tr><th>Description</th><th>Qty</th><th>Unit price</th><th>Discount</th><th>Tax</th><th>Line total</th></tr></thead><tbody>${lines.map(l=>`<tr><td>${esc(l.description||l.name||"")}</td><td>${esc(l.qty)}</td><td>${money(l.price)}</td><td>${money(l.discount||0)}</td><td>${money(l.tax)}</td><td>${money(l.lineTotal)}</td></tr>`).join("")}</tbody></table></div>
+    <div class="invoice-total">Subtotal excl. tax: ${money(d.totals.subtotal)}<br>Invoice discount: ${money(d.totals.discount)}<br>Additional charges: ${money(d.totals.charges)}<br>Tax: ${money(d.totals.taxTotal)}<br>Total incl. tax: ${money(d.totals.totalIncludingTax)}<br>Rounding: ${money(d.totals.rounding)}<br><span style="font-size:19px">Payable: ${money(d.totals.payable)}</span><br><span style="font-size:11px;font-weight:500;color:#718096">Payment: ${esc(d.payment||"Not specified")} · Paid: ${money(d.totals.paid)} · Balance: ${money(d.totals.balance)}</span></div>
+    <div style="margin-top:28px;padding-top:15px;border-top:1px solid #e5e9f2;font-size:10px;color:#718096;line-height:1.7">LOCAL DEMO RECORD — NOT AN OFFICIAL VALIDATED MALAYSIAN E-INVOICE. No MyInvois submission ID, validation timestamp or official QR has been issued.</div>`;
+}
+function nextInvoiceNumber(){
+  const year=new Date().getUTCFullYear(),prefix=`INV-${year}-`;
+  const used=db.invoices.map(x=>String(x?.internalNumber||"")).filter(x=>x.startsWith(prefix))
+    .map(x=>Number(x.slice(prefix.length))).filter(Number.isSafeInteger);
+  return `${prefix}${String(Math.max(0,...used)+1).padStart(4,"0")}`;
+}
+function recordInvoiceEvent(invoice,type,details={}){
+  invoice.events=Array.isArray(invoice.events)?invoice.events:[];
+  invoice.events.push({type,at:new Date().toISOString(),...details});
+  const saved=db.invoices.find(x=>x.id===invoice.id);
+  if(saved){saved.events=invoice.events.slice();persist()}
 }
 function confirmInvoice(){
   if(!requireDemoMode("Invoice draft saving"))return;
   if(!currentInvoice){toast("Preview the invoice first.");return}
-  const errors=validateInvoice(invoiceData());
+  const fresh=invoiceData(),errors=validateInvoice(fresh);
   if(errors.length){toast("Resolve the missing fields before confirming.");return}
-  if(!confirm("Confirm this local draft? This does NOT submit it to LHDN."))return;
-  currentInvoice.status="Confirmed local draft";
-  const existing=db.invoices.findIndex(x=>x.id===currentInvoice.id);
-  const saved=JSON.parse(JSON.stringify(currentInvoice));
-  if(existing>=0)db.invoices[existing]=saved;else db.invoices.push(saved);
-  persist();renderInvoiceHistory();toast("Local draft confirmed. No LHDN submission occurred.");
-  document.getElementById("validationBadge").textContent="Confirmed local draft";
+  if(currentInvoice.mode!==fresh.mode||currentInvoice.sourceTransactionId!==fresh.sourceTransactionId){toast("The source changed after preview. Preview again before saving.");return}
+  if(currentInvoice.mode!=="sale"){
+    const duplicate=db.invoices.some(x=>x?.mode!=="sale"&&x?.supplier?.name?.trim().toLowerCase()===fresh.seller.name.toLowerCase()&&x?.supplierInvoiceNumber?.trim().toLowerCase()===fresh.supplierInvoiceNumber.toLowerCase());
+    if(duplicate&&!confirm("A supplier invoice with this supplier and number is already recorded. Save another copy anyway?"))return;
+  }
+  if(!confirm("Save this local invoice record? This does NOT submit it to LHDN or change stock."))return;
+  if(db.invoices.some(x=>x.id===currentInvoice.id)){toast("This draft was already saved.");return}
+  const saved={...currentInvoice,...fresh,internalNumber:nextInvoiceNumber(),status:"Confirmed local record",confirmedAt:new Date().toISOString()};
+  saved.supplier={...saved.seller};
+  saved.events=[...(currentInvoice.events||[]),{type:"validation_before_save",at:saved.confirmedAt,result:"passed"},{type:"local_record_confirmed",at:saved.confirmedAt}];
+  db.invoices.push(JSON.parse(JSON.stringify(saved)));
+  if(!persist()){db.invoices.pop();return}
+  currentInvoice=saved;renderInvoicePaper(currentInvoice);renderInvoiceHistory();toast("Local invoice record saved. No submission occurred and stock is unchanged.");
+  document.getElementById("validationBadge").textContent="Saved local record";
 }
 function renderInvoiceHistory(){
   const body=document.getElementById("invoiceHistoryBody");if(!body)return;
-  body.innerHTML=db.invoices.length?db.invoices.slice().reverse().map(i=>`<tr><td>${esc(i.id)}</td><td>${esc(i.tx?.ref||"—")}</td><td>${esc(i.buyer?.name||"—")}</td><td>${money(i.tx?.total||0)}</td><td><span class="pill amber">${esc(i.status)}</span></td></tr>`).join(""):`<tr><td colspan="5"><div class="empty">No invoice drafts prepared yet.</div></td></tr>`;
+  body.innerHTML=db.invoices.length?db.invoices.slice().reverse().map(i=>{
+    const amount=i.totals?.payable??i.tx?.total??0,party=i.mode==="sale"?i.buyer?.name:(i.supplier?.name||i.seller?.name);
+    const source=i.mode==="sale"?"Sales":i.mode==="purchase"?"Purchase record":i.mode==="supplier_upload"?"Supplier upload":"Legacy draft";
+    return `<tr><td class="strong">${esc(i.internalNumber||i.id)}</td><td>${esc(i.docType||"Invoice")} · ${source}${i.correctsInvoiceId?`<br><span class="muted">Corrects ${esc(i.correctsInvoiceId)}</span>`:""}</td><td>${esc(party||"—")}</td><td>${money(amount)}</td><td><span class="pill amber">${esc(i.status||"Local draft")}</span></td></tr>`;
+  }).join(""):`<tr><td colspan="5"><div class="empty">No invoice records prepared yet.</div></td></tr>`;
 }
 function downloadBlob(filename,content,type){
   const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement("a");
-  a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);
+  a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function downloadInvoiceJSON(){
   if(!currentInvoice){toast("Preview an invoice first.");return}
   const {errors,...data}=currentInvoice;
-  downloadBlob("e-invoice-draft-"+currentInvoice.id+".json",JSON.stringify(data,null,2),"application/json");
+  recordInvoiceEvent(currentInvoice,"local_json_exported");
+  downloadBlob("invoice-record-"+(currentInvoice.internalNumber||currentInvoice.id)+".json",JSON.stringify(data,null,2),"application/json");
 }
 function downloadInvoiceHTML(){
   if(!currentInvoice){toast("Preview an invoice first.");return}
+  recordInvoiceEvent(currentInvoice,"local_html_downloaded");
   const html=`<!doctype html><html><head><meta charset="utf-8"><title>Invoice Draft</title><style>body{font-family:Arial,sans-serif;padding:35px;color:#222}table{width:100%;border-collapse:collapse;margin-top:20px}th,td{text-align:left;border-bottom:1px solid #ddd;padding:10px;font-size:12px}.right{text-align:right}.note{margin-top:30px;color:#777;font-size:11px}</style></head><body>${document.getElementById("invoicePaper").innerHTML}</body></html>`;
-  downloadBlob("invoice-draft-"+currentInvoice.id+".html",html,"text/html");
+  downloadBlob("invoice-record-"+(currentInvoice.internalNumber||currentInvoice.id)+".html",html,"text/html");
+}
+function printInvoice(){
+  if(!currentInvoice){toast("Preview an invoice first.");return}
+  recordInvoiceEvent(currentInvoice,"local_print_requested");
+  const page=document.getElementById("page-invoice");page.classList.add("printing");
+  document.body.classList.add("printing-invoice");
+  const cleanup=()=>{document.body.classList.remove("printing-invoice");page.classList.remove("printing")};
+  window.addEventListener("afterprint",cleanup,{once:true});
+  window.print();setTimeout(cleanup,2000);
 }
 function emailInvoice(){
   if(!currentInvoice){toast("Preview an invoice first.");return}
+  if(currentInvoice.mode!=="sale"){toast("Gmail compose is available only for a sales invoice in this demo.");return}
   const d=currentInvoice,recipient=d.buyer.email||"";
   if(!recipient){toast("Add the recipient email before preparing an email.");return}
-  const subject=encodeURIComponent("Invoice draft "+d.tx.ref+" — "+d.seller.name);
-  const body=encodeURIComponent("Dear "+d.buyer.name+",\n\nPlease find the invoice draft details for transaction "+d.tx.ref+".\nAmount: "+money(d.tx.total)+"\n\nPlease note this is a draft and has not been validated by LHDN MyInvois.\n\nRegards,\n"+d.seller.name);
-  document.getElementById("emailStatus").textContent="Opening your default email application. No message is sent automatically.";
-  window.location.href="mailto:"+encodeURIComponent(recipient)+"?subject="+subject+"&body="+body;
+  const subject=encodeURIComponent(`${d.docType} ${d.internalNumber||d.id} — ${d.seller.name}`);
+  const body=encodeURIComponent(`Dear ${d.buyer.name},\n\nPlease find the local invoice record ${d.internalNumber||d.id}.\nAmount: ${money(d.totals.payable)}\n\nThis document is a local demo record and has not been submitted to or validated by LHDN MyInvois. Please attach the reviewed PDF yourself.\n\nRegards,\n${d.seller.name}`);
+  recordInvoiceEvent(d,"gmail_compose_opened",{recipient});
+  document.getElementById("emailStatus").textContent="Opening Gmail compose. No message is sent and no attachment is added automatically.";
+  const url=`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(recipient)}&su=${subject}&body=${body}`;
+  const opened=window.open(url,"_blank","noopener,noreferrer");
+  if(!opened)window.location.href=url;
 }
 
 /* Initial demo content: deliberately no real customer information. */
 document.getElementById("rDate").value=today();
+updateInvoiceMode();
+updateCorrectionField();
 void initializeApplication();
 </script>
 </body>
