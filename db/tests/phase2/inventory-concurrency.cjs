@@ -12,7 +12,7 @@ async function blocked(admin,pid) {
 }
 async function concurrent(root,admin,check) {
   let counter=20000;
-  async function scope() {
+  async function scope({receiptQuantity=10}={}) {
     const company=id(counter++),p=id(counter++),q=id(counter++),contact=id(counter++);
     await h.transaction(admin,async c=>{
       await c.query("SET LOCAL ROLE stockwise_owner");
@@ -25,7 +25,7 @@ async function concurrent(root,admin,check) {
       await c.query("SET LOCAL ROLE stockwise_owner");
       return f.draft(c,{company,contact,kind,lines});
     },{commit:true});
-    const receipt=await make("purchase",[[p,10,1],[q,10,1]]);
+    const receipt=await make("purchase",[[p,receiptQuantity,1],[q,receiptQuantity,1]]);
     await h.transaction(admin,c=>f.post(c,receipt,id(counter++),company),{commit:true});
     return {company,p,q,contact,receipt,make,key:()=>id(counter++)};
   }
@@ -101,7 +101,7 @@ async function concurrent(root,admin,check) {
       await b.query("ROLLBACK");
     });await qty(s,3);
   });
-  for(const isolation of ["REPEATABLE READ","SERIALIZABLE"]) await check(isolation==="SERIALIZABLE"?"I56 serializable 40001 whole-transaction retry":"I44 repeatable-read 40001 whole-transaction retry",async()=>{
+  for(const isolation of ["REPEATABLE READ","SERIALIZABLE"]) await check(isolation==="SERIALIZABLE"?"I56 serializable conflict then insufficient-stock denial":"I44 repeatable-read conflict then insufficient-stock denial",async()=>{
     const s=await scope(),x=await s.make("sale",[[s.p,7,1]]),y=await s.make("sale",[[s.p,7,1]]),key=s.key();
     await pair(async(a,b,pid)=>{
       await b.query(`ROLLBACK; BEGIN ISOLATION LEVEL ${isolation}; SET LOCAL lock_timeout='4500ms'`);
@@ -109,9 +109,35 @@ async function concurrent(root,admin,check) {
       await f.post(a,x,s.key(),s.company);const pending=settle(f.post(b,y,key,s.company));
       await blocked(admin,pid);await a.query("COMMIT");assert.deepEqual(await pending,{ok:false,code:"40001"});
       await b.query("ROLLBACK; BEGIN");
-      await h.denied(()=>f.post(b,y,key,s.company),["P0001"]);await b.query("ROLLBACK");
+       // The transaction was safely aborted with 40001. A fresh transaction
+       // may retry the original key; it must still fail here because only 3
+       // units remain, so this is NOT a successful-retry assertion.
+       await h.denied(()=>f.post(b,y,key,s.company),["P0001"]);await b.query("ROLLBACK");
     });await qty(s,3);
   });
+  for(const isolation of ["REPEATABLE READ","SERIALIZABLE"]) await check(
+    isolation==="SERIALIZABLE"?"I59 serializable 40001 then successful same-key whole-transaction retry":
+      "I58 repeatable-read 40001 then successful same-key whole-transaction retry",async()=>{
+      const s=await scope({receiptQuantity:20}),x=await s.make("sale",[[s.p,7,1]]),
+        y=await s.make("sale",[[s.p,7,1]]),key=s.key();
+      await pair(async(a,b,pid)=>{
+        await b.query(`ROLLBACK; BEGIN ISOLATION LEVEL ${isolation}; SET LOCAL lock_timeout='4500ms'`);
+        await b.query("SELECT pg_current_snapshot()");
+        await f.post(a,x,s.key(),s.company);
+        const pending=settle(f.post(b,y,key,s.company));
+        await blocked(admin,pid);await a.query("COMMIT");
+        assert.deepEqual(await pending,{ok:false,code:"40001"});
+        await b.query("ROLLBACK; BEGIN");
+        assert.equal(await f.post(b,y,key,s.company),y);
+        await b.query("COMMIT");
+      });
+      await qty(s,6);
+      assert.equal((await admin.query(`SELECT count(*)::int n FROM stockwise.stock_movements
+        WHERE company_id=$1 AND order_id=ANY($2::uuid[])`,[s.company,[x,y]])).rows[0].n,2);
+      assert.equal((await admin.query(`SELECT count(*)::int n FROM stockwise.audit_logs
+        WHERE company_id=$1 AND order_id=ANY($2::uuid[]) AND action='order_posted'`,[s.company,[x,y]])).rows[0].n,2);
+      await h.reconcile(admin);
+    });
   for(const editFirst of [true,false]) await check(editFirst?"I54 parent-locked edit wins post race":"I55 post wins item-edit race",async()=>{
     const s=await scope(),x=await s.make("sale",[[s.p,7,1]]);
     await pair(async(a,b,pid)=>{
