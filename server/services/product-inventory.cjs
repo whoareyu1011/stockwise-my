@@ -80,6 +80,10 @@ function productInput(input, { partial = false } = {}) {
 
 function productProjection(row, role) {
   if (!plainObject(row) || !CODES.has(role)) dependencyUnavailable();
+  if (ROLE_FIELDS[role].some(field => !Object.hasOwn(row, field)) ||
+      !isUuid(row.id) || typeof row.sku !== "string" || typeof row.name !== "string" ||
+      typeof row.category !== "string" || typeof row.unit_code !== "string" ||
+      typeof row.is_active !== "boolean") dependencyUnavailable();
   const result = {};
   for (const field of ROLE_FIELDS[role]) {
     if (!Object.hasOwn(row, field)) continue;
@@ -94,6 +98,8 @@ function productProjection(row, role) {
           (Number.isSafeInteger(value) && value >= 0))) {
       dependencyUnavailable();
     }
+    if (field === "classification_code" &&
+        value !== null && typeof value !== "string") dependencyUnavailable();
     result[field] = value;
   }
   return Object.freeze(result);
@@ -156,13 +162,8 @@ function createProductInventoryService({ authorize, repository } = {}) {
       const context = await authorized(input, "product.basic.read");
       const filters = input.filters === undefined ? {} : input.filters;
       if (!plainObject(filters) ||
-          Object.keys(filters).some(key => !["search", "active", "limit"].includes(key))) invalid();
+          Object.keys(filters).some(key => key !== "limit")) invalid();
       const normalized = {};
-      if (Object.hasOwn(filters, "search")) normalized.search = text(filters.search, { max: 100 });
-      if (Object.hasOwn(filters, "active")) {
-        if (typeof filters.active !== "boolean") invalid();
-        normalized.active = filters.active;
-      }
       const limit = filters.limit === undefined ? 100 : filters.limit;
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) invalid();
       normalized.limit = limit;

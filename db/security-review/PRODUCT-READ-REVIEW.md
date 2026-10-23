@@ -69,6 +69,15 @@ trigger or prevent a trusted owner/migrator from changing membership records;
 see `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:31–36` and
 `PRODUCT-READ-PROPOSAL.sql:45–49`.
 
+## Precision follow-up for the API projection
+
+The read RPC proposal now serializes `NUMERIC` prices and `BIGINT` stock/
+threshold quantities as decimal strings in its JSON response. This is needed
+because ordinary JavaScript JSON numbers cannot represent every PostgreSQL
+value exactly. The product service rejects money returned as a JSON number
+rather than silently accepting a rounded value. These are source changes only;
+the SQL has not been compiled or exercised on PostgreSQL.
+
 ## Source files
 
 - `db/security-review/PRODUCT-READ-PROPOSAL.sql` — revised read-only product RPC

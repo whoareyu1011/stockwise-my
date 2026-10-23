@@ -53,10 +53,14 @@ GRANT stockwise_product_writer TO stockwise_migrator
 GRANT stockwise_inventory_writer TO stockwise_migrator
   WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 
-ALTER DEFAULT PRIVILEGES FOR ROLE stockwise_product_writer
-  IN SCHEMA stockwise_api REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
-ALTER DEFAULT PRIVILEGES FOR ROLE stockwise_inventory_writer
-  IN SCHEMA stockwise_api REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+SET LOCAL ROLE stockwise_product_writer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA stockwise_api
+  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+RESET ROLE;
+SET LOCAL ROLE stockwise_inventory_writer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA stockwise_api
+  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+RESET ROLE;
 
 DO $postflight$
 BEGIN
@@ -75,9 +79,34 @@ BEGIN
     JOIN pg_catalog.pg_roles granted_role ON granted_role.oid = m.roleid
     WHERE granted_role.rolname IN (
       'stockwise_product_writer','stockwise_inventory_writer')
-      AND member_role.rolname <> 'stockwise_migrator'
+      AND member_role.rolname NOT IN ('stockwise_migrator',current_user)
   ) THEN
     RAISE EXCEPTION 'A runtime or unexpected role can assume a write function-owner role';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members m
+    JOIN pg_catalog.pg_roles member_role ON member_role.oid=m.member
+    JOIN pg_catalog.pg_roles granted_role ON granted_role.oid=m.roleid
+    WHERE granted_role.rolname IN (
+      'stockwise_product_writer','stockwise_inventory_writer')
+      AND member_role.rolname=current_user
+      AND (NOT m.admin_option OR m.inherit_option OR m.set_option)
+  ) THEN
+    RAISE EXCEPTION 'Unexpected creator membership options on a write function-owner role';
+  END IF;
+  IF (
+    SELECT count(*) FROM pg_catalog.pg_auth_members m
+    JOIN pg_catalog.pg_roles granted_role ON granted_role.oid=m.roleid
+    WHERE granted_role.rolname='stockwise_product_writer'
+      AND m.member=pg_catalog.to_regrole('stockwise_migrator')
+  )<>1 OR (
+    SELECT count(*) FROM pg_catalog.pg_auth_members m
+    JOIN pg_catalog.pg_roles granted_role ON granted_role.oid=m.roleid
+    WHERE granted_role.rolname='stockwise_inventory_writer'
+      AND m.member=pg_catalog.to_regrole('stockwise_migrator')
+  )<>1 THEN
+    RAISE EXCEPTION 'Each writer role must have exactly the reviewed migrator membership';
   END IF;
   IF EXISTS (
     SELECT 1 FROM pg_catalog.pg_roles api

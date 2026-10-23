@@ -87,6 +87,11 @@ BEGIN
 END
 $preflight$;
 
+SET LOCAL ROLE stockwise_owner;
+GRANT REFERENCES (company_id,id) ON stockwise.products TO stockwise_auth_owner;
+GRANT REFERENCES (company_id,id) ON stockwise.orders TO stockwise_auth_owner;
+RESET ROLE;
+
 -- Private idempotency and user-audit tables have no API grants and no RLS
 -- policies. Only the narrowly scoped auth-owner helper functions access them.
 SET LOCAL ROLE stockwise_auth_owner;
@@ -226,10 +231,15 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE v_user_id uuid := auth.uid();
 BEGIN
-  IF v_user_id IS NULL OR p_response IS NULL
+  IF v_user_id IS NULL OR p_company_id IS NULL
+     OR p_command NOT IN ('product.create','product.update','product.archive','stock.adjust')
+     OR p_key IS NULL OR p_key !~ '^[A-Za-z0-9._~-]{8,128}$'
+     OR p_payload IS NULL OR pg_catalog.jsonb_typeof(p_payload)<>'object'
+     OR p_response IS NULL
      OR pg_catalog.jsonb_typeof(p_response)<>'object' THEN
     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='invalid command result';
   END IF;
+  PERFORM stockwise_private.lock_company_role(p_company_id);
   PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
     p_company_id::text||':'||v_user_id::text||':'||p_command||':'||p_key,0));
   INSERT INTO stockwise_private.command_results(
@@ -277,23 +287,25 @@ DECLARE v_key text;
 BEGIN
   IF p_payload IS NULL OR pg_catalog.jsonb_typeof(p_payload)<>'object'
      OR (p_partial AND p_payload='{}'::jsonb)
-     OR p_payload - ARRAY[
+     OR (p_payload - ARRAY[
        'sku','name','category','unit_code','selling_price','cost_price',
        'low_stock_threshold','classification_code'
-     ] <> '{}'::jsonb
+     ]) <> '{}'::jsonb
      OR (NOT p_partial AND (NOT (p_payload ? 'sku') OR NOT (p_payload ? 'name'))) THEN
     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='invalid product';
   END IF;
   FOREACH v_key IN ARRAY ARRAY['sku','name','category','unit_code'] LOOP
     IF p_payload ? v_key THEN
       IF pg_catalog.jsonb_typeof(p_payload->v_key)<>'string'
-         OR p_payload->>v_key <> pg_catalog.btrim(p_payload->>v_key) THEN
+          OR p_payload->>v_key <> pg_catalog.btrim(p_payload->>v_key)
+          OR p_payload->>v_key ~ '[[:cntrl:]]' THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='invalid product';
       END IF;
     END IF;
   END LOOP;
   IF (p_payload ? 'sku' AND (pg_catalog.length(p_payload->>'sku') NOT BETWEEN 1 AND 128))
-     OR (p_payload ? 'name' AND (pg_catalog.length(p_payload->>'name') NOT BETWEEN 1 AND 255))
+     OR (p_payload ? 'name' AND (
+       pg_catalog.length(pg_catalog.btrim(p_payload->>'name')) NOT BETWEEN 1 AND 255))
      OR (p_payload ? 'category' AND pg_catalog.length(p_payload->>'category')>120)
      OR (p_payload ? 'unit_code' AND pg_catalog.length(p_payload->>'unit_code') NOT BETWEEN 1 AND 16) THEN
     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='invalid product';
@@ -319,7 +331,8 @@ BEGIN
   END IF;
   IF p_payload ? 'classification_code'
      AND p_payload->'classification_code'<>'null'::jsonb
-     AND pg_catalog.length(p_payload->>'classification_code')>64 THEN
+      AND (pg_catalog.length(p_payload->>'classification_code')>64
+           OR p_payload->>'classification_code' ~ '[[:cntrl:]]') THEN
     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='invalid classification';
   END IF;
 END
@@ -338,6 +351,8 @@ REVOKE ALL ON FUNCTION stockwise_private.validate_product_payload(jsonb,boolean)
   FROM PUBLIC,anon,authenticated,service_role,authenticator,stockwise_product_reader;
 GRANT USAGE ON SCHEMA stockwise_private TO stockwise_product_writer,stockwise_inventory_writer;
 GRANT EXECUTE ON FUNCTION stockwise_private.lock_company_role(uuid)
+  TO stockwise_product_writer,stockwise_inventory_writer;
+GRANT EXECUTE ON FUNCTION stockwise_private.current_company_role(uuid)
   TO stockwise_product_writer,stockwise_inventory_writer;
 GRANT EXECUTE ON FUNCTION stockwise_private.begin_command(uuid,text,text,jsonb)
   TO stockwise_product_writer,stockwise_inventory_writer;
@@ -373,6 +388,14 @@ GRANT SELECT (id,company_id,is_active)
   ON stockwise.products TO stockwise_inventory_writer;
 GRANT SELECT (company_id,product_id,quantity)
   ON stockwise.stock_balances TO stockwise_inventory_writer;
+GRANT SELECT (company_id,id,status,kind)
+  ON stockwise.orders TO stockwise_inventory_writer;
+-- The base guard_order_item trigger locks its parent with SELECT ... FOR UPDATE.
+-- PostgreSQL requires UPDATE privilege on at least one parent column for that
+-- lock; only notes is granted, and no API function exposes a notes update.
+GRANT UPDATE (notes) ON stockwise.orders TO stockwise_inventory_writer;
+GRANT SELECT (id,company_id,order_id,kind,product_id)
+  ON stockwise.stock_movements TO stockwise_inventory_writer;
 GRANT INSERT (id,company_id,reference,kind,business_date,notes)
   ON stockwise.orders TO stockwise_inventory_writer;
 GRANT INSERT (
@@ -442,6 +465,16 @@ CREATE POLICY balances_inventory_read_company
   TO stockwise_inventory_writer USING (
     stockwise_private.current_company_role(company_id) IN ('Owner','Admin')
   );
+CREATE POLICY movements_inventory_read
+  ON stockwise.stock_movements AS PERMISSIVE FOR SELECT
+  TO stockwise_inventory_writer USING (
+    stockwise_private.current_company_role(company_id) IN ('Owner','Admin')
+  );
+CREATE POLICY movements_inventory_read_company
+  ON stockwise.stock_movements AS RESTRICTIVE FOR SELECT
+  TO stockwise_inventory_writer USING (
+    stockwise_private.current_company_role(company_id) IN ('Owner','Admin')
+  );
 CREATE POLICY orders_inventory_insert
   ON stockwise.orders AS PERMISSIVE FOR INSERT
   TO stockwise_inventory_writer WITH CHECK (
@@ -452,6 +485,26 @@ CREATE POLICY orders_inventory_insert_company
   TO stockwise_inventory_writer WITH CHECK (
     stockwise_private.current_company_role(company_id) IN ('Owner','Admin')
   );
+CREATE POLICY orders_inventory_read
+  ON stockwise.orders AS PERMISSIVE FOR SELECT
+  TO stockwise_inventory_writer USING (
+    stockwise_private.current_company_role(company_id) IN ('Owner','Admin')
+  );
+CREATE POLICY orders_inventory_read_company
+  ON stockwise.orders AS RESTRICTIVE FOR SELECT
+  TO stockwise_inventory_writer USING (
+    stockwise_private.current_company_role(company_id) IN ('Owner','Admin')
+  );
+CREATE POLICY orders_inventory_parent_lock
+  ON stockwise.orders AS PERMISSIVE FOR UPDATE
+  TO stockwise_inventory_writer
+  USING (stockwise_private.current_company_role(company_id) IN ('Owner','Admin'))
+  WITH CHECK (stockwise_private.current_company_role(company_id) IN ('Owner','Admin'));
+CREATE POLICY orders_inventory_parent_lock_company
+  ON stockwise.orders AS RESTRICTIVE FOR UPDATE
+  TO stockwise_inventory_writer
+  USING (stockwise_private.current_company_role(company_id) IN ('Owner','Admin'))
+  WITH CHECK (stockwise_private.current_company_role(company_id) IN ('Owner','Admin'));
 CREATE POLICY order_items_inventory_insert
   ON stockwise.order_items AS PERMISSIVE FOR INSERT
   TO stockwise_inventory_writer WITH CHECK (
@@ -612,7 +665,9 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $function$
-DECLARE v_role text; v_replay boolean; v_prior jsonb; v_payload jsonb; v_result jsonb;
+DECLARE
+  v_role text; v_replay boolean; v_prior jsonb; v_payload jsonb; v_result jsonb;
+  v_count bigint;
 BEGIN
   v_role := stockwise_private.lock_company_role(p_company_id);
   IF v_role NOT IN ('Owner','Admin') THEN
@@ -625,13 +680,14 @@ BEGIN
   IF v_replay THEN RETURN v_prior; END IF;
   UPDATE stockwise.products SET is_active=false
   WHERE company_id=p_company_id AND id=p_product_id AND is_active;
-  IF NOT FOUND AND NOT EXISTS (
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  IF v_count=0 AND NOT EXISTS (
     SELECT 1 FROM stockwise.products
     WHERE company_id=p_company_id AND id=p_product_id AND NOT is_active
   ) THEN
     RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='product not found';
   END IF;
-  IF FOUND THEN
+  IF v_count=1 THEN
     PERFORM stockwise_private.record_user_event(
       p_company_id,'product_archived','product',p_product_id,NULL,
       pg_catalog.jsonb_build_object('changed_fields',pg_catalog.jsonb_build_array('is_active'))
@@ -646,6 +702,10 @@ $function$;
 RESET ROLE;
 
 -- Grant the exact reader and writer RPC signatures. No direct API table grants.
+SET LOCAL ROLE stockwise_owner;
+GRANT USAGE ON SCHEMA stockwise_api TO authenticated;
+RESET ROLE;
+SET LOCAL ROLE stockwise_product_writer;
 REVOKE ALL ON FUNCTION stockwise_api.get_product(uuid,uuid)
   FROM PUBLIC,anon,authenticated,service_role,authenticator;
 REVOKE ALL ON FUNCTION stockwise_api.create_product(uuid,text,jsonb)
@@ -654,11 +714,11 @@ REVOKE ALL ON FUNCTION stockwise_api.update_product(uuid,uuid,text,jsonb)
   FROM PUBLIC,anon,authenticated,service_role,authenticator;
 REVOKE ALL ON FUNCTION stockwise_api.archive_product(uuid,uuid,text)
   FROM PUBLIC,anon,authenticated,service_role,authenticator;
-GRANT USAGE ON SCHEMA stockwise_api TO authenticated;
 GRANT EXECUTE ON FUNCTION stockwise_api.get_product(uuid,uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION stockwise_api.create_product(uuid,text,jsonb) TO authenticated;
 GRANT EXECUTE ON FUNCTION stockwise_api.update_product(uuid,uuid,text,jsonb) TO authenticated;
 GRANT EXECUTE ON FUNCTION stockwise_api.archive_product(uuid,uuid,text) TO authenticated;
+RESET ROLE;
 
 SET LOCAL ROLE stockwise_inventory_writer;
 ALTER DEFAULT PRIVILEGES IN SCHEMA stockwise_api
@@ -683,7 +743,8 @@ BEGIN
   END IF;
   IF p_direction NOT IN ('in','out') OR p_quantity IS NULL
      OR p_quantity<1 OR p_quantity>1000000000
-     OR p_reason IS NULL OR pg_catalog.length(pg_catalog.btrim(p_reason)) NOT BETWEEN 3 AND 300 THEN
+     OR p_reason IS NULL OR pg_catalog.length(pg_catalog.btrim(p_reason)) NOT BETWEEN 3 AND 300
+     OR p_reason ~ '[[:cntrl:]]' THEN
     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='invalid adjustment';
   END IF;
   v_payload := pg_catalog.jsonb_build_object(
@@ -758,10 +819,18 @@ END
 $function$;
 RESET ROLE;
 
+SET LOCAL ROLE stockwise_inventory_writer;
 REVOKE ALL ON FUNCTION stockwise_api.adjust_stock(uuid,uuid,text,bigint,text,text)
   FROM PUBLIC,anon,authenticated,service_role,authenticator;
 GRANT EXECUTE ON FUNCTION stockwise_api.adjust_stock(uuid,uuid,text,bigint,text,text)
   TO authenticated;
+RESET ROLE;
+
+-- Schema CREATE is only needed while the migration creates functions.
+SET LOCAL ROLE stockwise_owner;
+REVOKE CREATE ON SCHEMA stockwise_api
+  FROM stockwise_product_writer,stockwise_inventory_writer;
+RESET ROLE;
 
 -- The existing generic poster is not itself a user-authorized API. Only the
 -- inventory-writer definer function above may call it through this grant.
@@ -773,17 +842,29 @@ GRANT EXECUTE ON FUNCTION stockwise.post_order(uuid,uuid,uuid)
 RESET ROLE;
 
 DO $postflight$
+DECLARE
+  v_api_role text;
+  v_table text;
 BEGIN
   IF EXISTS (
-    SELECT 1 FROM pg_catalog.pg_proc p
-    JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
-    WHERE n.nspname='stockwise_api'
-      AND p.proname IN ('get_product','create_product','update_product',
-                        'archive_product','adjust_stock')
-      AND (pg_catalog.pg_get_userbyid(p.proowner) NOT IN
-           ('stockwise_product_writer','stockwise_inventory_writer')
-        OR NOT p.prosecdef OR p.proconfig IS NULL
-        OR NOT ('search_path=pg_catalog, pg_temp'=ANY(p.proconfig)))
+    SELECT 1 FROM (
+      VALUES
+        ('get_product','uuid,uuid','stockwise_product_writer'),
+        ('create_product','uuid,text,jsonb','stockwise_product_writer'),
+        ('update_product','uuid,uuid,text,jsonb','stockwise_product_writer'),
+        ('archive_product','uuid,uuid,text','stockwise_product_writer'),
+        ('adjust_stock','uuid,uuid,text,bigint,text,text','stockwise_inventory_writer')
+    ) expected(function_name,argument_types,expected_owner)
+    LEFT JOIN pg_catalog.pg_proc p ON p.oid=(
+      ('stockwise_api.'||expected.function_name||'('||expected.argument_types||')')::regprocedure
+    )
+    WHERE p.oid IS NULL
+       OR pg_catalog.pg_get_userbyid(p.proowner)<>expected.expected_owner
+       OR NOT p.prosecdef OR p.proconfig IS NULL
+       OR NOT ('search_path=pg_catalog, pg_temp'=ANY(p.proconfig))
+       OR (SELECT pg_catalog.count(*) FROM pg_catalog.pg_proc overload
+           WHERE overload.pronamespace=p.pronamespace
+             AND overload.proname=p.proname)<>1
   ) THEN
     RAISE EXCEPTION 'A product/inventory RPC owner, SECURITY DEFINER flag or search_path is unsafe';
   END IF;
@@ -792,15 +873,111 @@ BEGIN
      OR pg_catalog.has_table_privilege('authenticated','stockwise.stock_balances','UPDATE')
      OR pg_catalog.has_table_privilege('authenticated','stockwise.stock_movements','INSERT')
      OR pg_catalog.has_table_privilege('stockwise_inventory_writer','stockwise.stock_balances','UPDATE')
-     OR pg_catalog.has_table_privilege('stockwise_inventory_writer','stockwise.stock_movements','INSERT') THEN
+     OR pg_catalog.has_table_privilege('stockwise_inventory_writer','stockwise.stock_movements','INSERT')
+     OR pg_catalog.has_table_privilege('stockwise_product_writer','stockwise.products','DELETE')
+     OR pg_catalog.has_table_privilege('stockwise_product_writer','stockwise.stock_balances','UPDATE')
+     OR pg_catalog.has_table_privilege('stockwise_product_writer','stockwise.stock_movements','INSERT')
+     OR pg_catalog.has_table_privilege('stockwise_inventory_writer','stockwise.products','INSERT')
+     OR pg_catalog.has_table_privilege('stockwise_inventory_writer','stockwise.products','UPDATE')
+     OR pg_catalog.has_table_privilege('stockwise_inventory_writer','stockwise.products','DELETE')
+     OR pg_catalog.has_table_privilege('stockwise_inventory_writer','stockwise.orders','DELETE')
+     OR pg_catalog.has_column_privilege('stockwise_inventory_writer',
+       'stockwise.orders','status','UPDATE')
+     OR pg_catalog.has_column_privilege('stockwise_inventory_writer',
+       'stockwise.orders','posting_key','UPDATE')
+     OR pg_catalog.has_table_privilege('stockwise_inventory_writer','stockwise.order_items','UPDATE') THEN
     RAISE EXCEPTION 'Direct business-table write privilege was granted unexpectedly';
+  END IF;
+  FOREACH v_api_role IN ARRAY ARRAY['anon','authenticated','service_role','authenticator'] LOOP
+    IF pg_catalog.has_schema_privilege(v_api_role,'stockwise','USAGE')
+       OR pg_catalog.has_schema_privilege(v_api_role,'stockwise_private','USAGE') THEN
+      RAISE EXCEPTION 'An API role can access a non-exposed StockWise schema';
+    END IF;
+    FOREACH v_table IN ARRAY ARRAY[
+      'companies','products','contacts','orders','order_items',
+      'stock_balances','stock_movements','audit_logs'
+    ] LOOP
+      IF pg_catalog.has_table_privilege(v_api_role,'stockwise.'||v_table,'SELECT')
+         OR pg_catalog.has_table_privilege(v_api_role,'stockwise.'||v_table,'INSERT')
+         OR pg_catalog.has_table_privilege(v_api_role,'stockwise.'||v_table,'UPDATE')
+         OR pg_catalog.has_table_privilege(v_api_role,'stockwise.'||v_table,'DELETE')
+         OR pg_catalog.has_table_privilege(v_api_role,'stockwise.'||v_table,'TRUNCATE') THEN
+        RAISE EXCEPTION 'An API role has direct access to a business base table';
+      END IF;
+    END LOOP;
+    FOREACH v_table IN ARRAY ARRAY['command_results','user_audit_events'] LOOP
+      IF pg_catalog.has_table_privilege(
+           v_api_role,'stockwise_private.'||v_table,'SELECT')
+         OR pg_catalog.has_table_privilege(
+           v_api_role,'stockwise_private.'||v_table,'INSERT')
+         OR pg_catalog.has_table_privilege(
+           v_api_role,'stockwise_private.'||v_table,'UPDATE')
+         OR pg_catalog.has_table_privilege(
+           v_api_role,'stockwise_private.'||v_table,'DELETE') THEN
+        RAISE EXCEPTION 'An API role has direct access to private command/audit data';
+      END IF;
+    END LOOP;
+  END LOOP;
+  IF EXISTS (
+    SELECT 1 FROM (VALUES
+      ('get_product','uuid,uuid'),
+      ('create_product','uuid,text,jsonb'),
+      ('update_product','uuid,uuid,text,jsonb'),
+      ('archive_product','uuid,uuid,text'),
+      ('adjust_stock','uuid,uuid,text,bigint,text,text')
+    ) rpc(function_name,argument_types)
+    WHERE pg_catalog.has_function_privilege(
+      'anon',
+      ('stockwise_api.'||rpc.function_name||'('||rpc.argument_types||')')::regprocedure,
+      'EXECUTE')
+       OR pg_catalog.has_function_privilege(
+      'service_role',
+      ('stockwise_api.'||rpc.function_name||'('||rpc.argument_types||')')::regprocedure,
+      'EXECUTE')
+       OR EXISTS (
+         SELECT 1 FROM pg_catalog.pg_proc p
+         CROSS JOIN LATERAL pg_catalog.aclexplode(
+           COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
+         WHERE p.oid=(
+           ('stockwise_api.'||rpc.function_name||'('||rpc.argument_types||')')::regprocedure
+         )
+         AND a.grantee=0 AND a.privilege_type='EXECUTE'
+       )
+  ) THEN
+    RAISE EXCEPTION 'An unapproved role can execute a product/inventory RPC';
+  END IF;
+  IF NOT pg_catalog.has_function_privilege(
+       'stockwise_inventory_writer','stockwise.post_order(uuid,uuid,uuid)','EXECUTE')
+     OR pg_catalog.has_function_privilege(
+       'anon','stockwise.post_order(uuid,uuid,uuid)','EXECUTE')
+     OR pg_catalog.has_function_privilege(
+       'authenticated','stockwise.post_order(uuid,uuid,uuid)','EXECUTE')
+     OR pg_catalog.has_function_privilege(
+       'service_role','stockwise.post_order(uuid,uuid,uuid)','EXECUTE')
+     OR pg_catalog.has_function_privilege(
+       'authenticator','stockwise.post_order(uuid,uuid,uuid)','EXECUTE')
+     OR EXISTS (
+       SELECT 1 FROM pg_catalog.pg_proc p
+       CROSS JOIN LATERAL pg_catalog.aclexplode(
+         COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
+       WHERE p.oid=pg_catalog.to_regprocedure('stockwise.post_order(uuid,uuid,uuid)')
+         AND a.grantee=0 AND a.privilege_type='EXECUTE'
+     ) THEN
+    RAISE EXCEPTION 'The generic order poster has an unintended effective executor';
   END IF;
   IF pg_catalog.has_function_privilege('anon',
        'stockwise_api.adjust_stock(uuid,uuid,text,bigint,text,text)','EXECUTE')
      OR pg_catalog.has_function_privilege('service_role',
        'stockwise_api.adjust_stock(uuid,uuid,text,bigint,text,text)','EXECUTE')
-     OR pg_catalog.has_function_privilege('PUBLIC',
-       'stockwise_api.adjust_stock(uuid,uuid,text,bigint,text,text)','EXECUTE') THEN
+     OR EXISTS (
+       SELECT 1
+       FROM pg_catalog.pg_proc p
+       CROSS JOIN LATERAL pg_catalog.aclexplode(
+         COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
+       WHERE p.oid=pg_catalog.to_regprocedure(
+         'stockwise_api.adjust_stock(uuid,uuid,text,bigint,text,text)')
+         AND a.grantee=0 AND a.privilege_type='EXECUTE'
+     ) THEN
     RAISE EXCEPTION 'An unintended role can execute the stock adjustment RPC';
   END IF;
 END

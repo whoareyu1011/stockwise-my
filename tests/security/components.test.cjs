@@ -17,6 +17,8 @@ const {
 const { createTrustedRemoteJwks } = require("../../server/security/trusted-jwks.cjs");
 const { SecurityError } = require("../../server/security/errors.cjs");
 const { createProductInventoryService } = require("../../server/services/product-inventory.cjs");
+const { createRequestScopedProductRepository } =
+  require("../../server/repositories/supabase-product-repository.cjs");
 
 const rejectsCode = (operation, code) =>
   assert.rejects(operation, error => error instanceof SecurityError && error.code === code);
@@ -346,6 +348,23 @@ test("single product read is company-scoped by the repository and uses the role 
   }), "AUTHORIZATION_DENIED");
 });
 
+test("product service rejects lossy JSON numeric money and unsupported filters", async () => {
+  const { service, principal, session } = await createService("Owner", {
+    repositoryOverrides: {
+      async listProducts() {
+        return [productRow({ selling_price: 12.345678 })];
+      },
+    },
+  });
+  await rejectsCode(() => service.listProducts({
+    principal, session, companyId: fixtures.A,
+  }), "DATABASE_UNAVAILABLE");
+  await rejectsCode(() => service.listProducts({
+    principal, session, companyId: fixtures.A,
+    filters: { search: "anything" },
+  }), "REQUEST_INVALID");
+});
+
 test("product create/update/archive require Owner or Admin and reject forged scope fields", async t => {
   const validProduct = { sku: "sku-2", name: "New item", selling_price: "10.500000" };
   await t.test("Owner can create with server-derived identity and company", async () => {
@@ -467,17 +486,17 @@ test("stock adjustment is Owner/Admin-only, validated, audited-attributed and id
     assert.equal(calls.length, 0);
   });
   await t.test("same stock-adjustment key replays one result; changed payload conflicts", async () => {
-    const { service, principal, session, calls } = await createService("Owner");
+    const { service, principal, session, calls, effects } = await createService("Owner");
     const input = { principal, session, ...request };
     const first = await service.adjustStock(input);
     const retry = await service.adjustStock(input);
     assert.deepEqual(retry, first);
-    assert.equal(calls.length, 3);
-    assert.equal(effects.length, 1);
     await rejectsCode(() => service.adjustStock({
       ...input,
       quantity: request.quantity + 1,
     }), "IDEMPOTENCY_CONFLICT");
+    assert.equal(calls.length, 3);
+    assert.equal(effects.length, 1);
   });
 });
 
@@ -503,4 +522,189 @@ test("repository and authorization failures return fixed safe errors", async () 
   assert.equal(status, 500);
   assert.equal(body.code, "INTERNAL_ERROR");
   assert.doesNotMatch(JSON.stringify(body), /private stack|credential|database URL/i);
+});
+
+test("request-scoped Supabase repository forwards only the verified user token to one RPC", async () => {
+  const tokenA = await fixtures.token();
+  const tokenB = await fixtures.token({ sub: fixtures.OTHER, session_id: fixtures.ORDER });
+  const verifier = await fixtures.verifier();
+  const authenticate = createAuthenticationMiddleware({
+    verifyToken: verifier,
+    verifySession: fixtures.sessionVerifier(),
+    clock: () => fixtures.NOW,
+  });
+  const requests = [
+    { headers: { authorization: `Bearer ${tokenA}` } },
+    { headers: { authorization: `Bearer ${tokenB}` } },
+  ];
+  for (const request of requests) {
+    const result = await invoke(authenticate, request);
+    assert.equal(result.error, undefined);
+  }
+
+  const seen = [];
+  const makeRepository = request => createRequestScopedProductRepository({
+    request,
+    projectUrl: "https://stockwise-demo.supabase.co",
+    publishableKey: "sb_publishable_synthetic_test_key",
+    fetchImpl: async (url, options) => {
+      seen.push({ url, options });
+      return new Response(JSON.stringify({ movementId: fixtures.ORDER,
+        balanceBefore: 8, balanceAfter: 10 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const args = {
+    companyId: fixtures.A,
+    productId: fixtures.OTHER,
+    direction: "in",
+    quantity: 2,
+    reason: "Synthetic test",
+    idempotencyKey: "request-scope-key-01",
+  };
+  await makeRepository(requests[0]).adjustStock(args);
+  await makeRepository(requests[1]).adjustStock(args);
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0].url,
+    "https://stockwise-demo.supabase.co/rest/v1/rpc/adjust_stock");
+  assert.equal(seen[0].options.method, "POST");
+  assert.equal(seen[0].options.redirect, "manual");
+  assert.equal(seen[0].options.headers.authorization, `Bearer ${tokenA}`);
+  assert.equal(seen[1].options.headers.authorization, `Bearer ${tokenB}`);
+  assert.equal(seen[0].options.headers.apikey, "sb_publishable_synthetic_test_key");
+  assert.equal(seen[0].options.headers["content-profile"], "stockwise_api");
+  assert.deepEqual(JSON.parse(seen[0].options.body), {
+    p_company_id: fixtures.A,
+    p_product_id: fixtures.OTHER,
+    p_direction: "in",
+    p_quantity: 2,
+    p_reason: "Synthetic test",
+    p_idempotency_key: "request-scope-key-01",
+  });
+});
+
+test("request-scoped repository rejects missing identity and unsafe API credentials", async () => {
+  let called = false;
+  const request = { headers: {} };
+  await rejectsCode(async () => {
+    const repository = createRequestScopedProductRepository({
+      request,
+      projectUrl: "https://stockwise-demo.supabase.co",
+      publishableKey: "sb_publishable_synthetic_test_key",
+      fetchImpl: async () => {
+        called = true;
+        return new Response("[]", { status: 200 });
+      },
+    });
+    return repository.listProducts({ companyId: fixtures.A, filters: { limit: 10 } });
+  }, "AUTH_INVALID");
+  assert.equal(called, false);
+  assert.throws(() => createRequestScopedProductRepository({
+    request,
+    projectUrl: "http://stockwise-demo.supabase.co",
+    publishableKey: "sb_publishable_synthetic_test_key",
+  }), error => error instanceof SecurityError && error.code === "SECURITY_CONFIGURATION");
+  assert.equal(
+    require("../../server/repositories/supabase-product-repository.cjs")
+      .isPublishableKey("eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.signature"),
+    false,
+  );
+});
+
+test("each repository mutation is one database RPC with a durable retry key", async () => {
+  const token = await fixtures.token();
+  const request = { headers: { authorization: `Bearer ${token}` } };
+  await invoke(createAuthenticationMiddleware({
+    verifyToken: await fixtures.verifier(),
+    verifySession: fixtures.sessionVerifier(),
+    clock: () => fixtures.NOW,
+  }), request);
+  const seen = [];
+  const repository = createRequestScopedProductRepository({
+    request,
+    projectUrl: "https://stockwise-demo.supabase.co",
+    publishableKey: "sb_publishable_synthetic_test_key",
+    fetchImpl: async (url, options) => {
+      seen.push({ url, options });
+      const name = url.split("/").at(-1);
+      const result = name === "archive_product"
+        ? { id: fixtures.OTHER, is_active: false }
+        : name === "adjust_stock"
+          ? { movementId: fixtures.ORDER, balanceBefore: 4, balanceAfter: 5 }
+          : productRow({ id: fixtures.OTHER });
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const key = "atomic-rpc-test-key-1";
+  await repository.createProduct({
+    companyId: fixtures.A, idempotencyKey: key,
+    product: { sku: "A", name: "A" },
+  });
+  await repository.updateProduct({
+    companyId: fixtures.A, productId: fixtures.OTHER, idempotencyKey: key,
+    changes: { name: "B" },
+  });
+  await repository.archiveProduct({
+    companyId: fixtures.A, productId: fixtures.OTHER, idempotencyKey: key,
+  });
+  await repository.adjustStock({
+    companyId: fixtures.A, productId: fixtures.OTHER, direction: "in",
+    quantity: 1, reason: "One transaction", idempotencyKey: key,
+  });
+  assert.deepEqual(seen.map(item => item.url.split("/").at(-1)), [
+    "create_product", "update_product", "archive_product", "adjust_stock",
+  ]);
+  for (const { options } of seen) {
+    assert.equal(options.method, "POST");
+    assert.equal(options.headers.authorization, `Bearer ${token}`);
+    assert.equal(JSON.parse(options.body).p_idempotency_key, key);
+  }
+  assert.equal(seen.length, 4, "no client-side multi-step mutation or hidden retry");
+});
+
+test("repository sanitizes database errors and marks write transport failures uncertain", async () => {
+  const token = await fixtures.token();
+  const request = { headers: { authorization: `Bearer ${token}` } };
+  await invoke(createAuthenticationMiddleware({
+    verifyToken: await fixtures.verifier(),
+    verifySession: fixtures.sessionVerifier(),
+    clock: () => fixtures.NOW,
+  }), request);
+  const repository = createRequestScopedProductRepository({
+    request,
+    projectUrl: "https://stockwise-demo.supabase.co",
+    publishableKey: "sb_publishable_synthetic_test_key",
+    fetchImpl: async () => new Response(JSON.stringify({
+      code: "PZ001",
+      message: "private SQL text and internal data",
+    }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  await rejectsCode(() => repository.createProduct({
+    companyId: fixtures.A,
+    idempotencyKey: "same-key-retry-001",
+    product: { sku: "A", name: "A" },
+  }), "IDEMPOTENCY_CONFLICT");
+
+  const timeoutRepository = createRequestScopedProductRepository({
+    request,
+    projectUrl: "https://stockwise-demo.supabase.co",
+    publishableKey: "sb_publishable_synthetic_test_key",
+    fetchImpl: async () => { throw new Error("simulated lost response"); },
+  });
+  await rejectsCode(() => timeoutRepository.adjustStock({
+    companyId: fixtures.A,
+    productId: fixtures.OTHER,
+    direction: "out",
+    quantity: 1,
+    reason: "Synthetic test",
+    idempotencyKey: "lost-response-retry-1",
+  }), "COMMIT_UNCERTAIN");
 });

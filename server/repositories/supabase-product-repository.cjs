@@ -11,7 +11,7 @@ const RPC = Object.freeze({
   archiveProduct: "archive_product",
   adjustStock: "adjust_stock",
 });
-const MAX_RESPONSE_BYTES = 32 * 1024;
+const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_TIMEOUT_MS = 15_000;
 
 function safeError(code) {
@@ -55,7 +55,40 @@ function safeSqlError(status, sqlState, mutating) {
   if (sqlState === "PZ003") return "STOCK_LIMIT";
   if (sqlState === "22023") return "REQUEST_INVALID";
   if (status === 409 || sqlState === "23505") return "RESOURCE_CONFLICT";
+  if (status >= 400 && status < 500) return "TRANSACTION_FAILED";
   return mutating ? "COMMIT_UNCERTAIN" : "DATABASE_UNAVAILABLE";
+}
+
+async function readBodyBounded(response) {
+  const length = response.headers?.get?.("content-length");
+  if (length && Number(length) > MAX_RESPONSE_BYTES) {
+    safeError("DATABASE_UNAVAILABLE");
+  }
+  if (!response.body?.getReader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
+      safeError("DATABASE_UNAVAILABLE");
+    }
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        safeError("DATABASE_UNAVAILABLE");
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, size).toString("utf8");
 }
 
 function createRequestScopedProductRepository({
@@ -74,6 +107,7 @@ function createRequestScopedProductRepository({
   }
 
   async function rpc(name, args, { mutating = false } = {}) {
+    if (!Object.hasOwn(RPC, name)) safeError("SECURITY_CONFIGURATION");
     const token = getVerifiedAccessToken(request);
     if (!token) safeError("AUTH_INVALID");
     const controller = new AbortController();
@@ -109,11 +143,7 @@ function createRequestScopedProductRepository({
     }
     let text;
     try {
-      const length = response.headers?.get?.("content-length");
-      if (length && Number(length) > MAX_RESPONSE_BYTES) {
-        safeError("DATABASE_UNAVAILABLE");
-      }
-      text = await response.text();
+      text = await readBodyBounded(response);
     } catch {
       safeError(mutating ? "COMMIT_UNCERTAIN" : "DATABASE_UNAVAILABLE");
     }
