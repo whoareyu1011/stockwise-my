@@ -1,6 +1,8 @@
 # StockWise inventory migration — preparation only
 
-**Status: NOT APPLIED. No database-changing tests have been run.**
+**Status: repository records the migration as NOT APPLIED.** Retained reports
+document historical disposable PostgreSQL 17.6 tests of the inventory migration
+and role prerequisites. The later product-read proposals have not been executed.
 
 This folder is review material. Nothing here is imported by `server.js`,
 `package.json`, or the Run workflow. Do not paste the SQL into a database editor
@@ -31,20 +33,25 @@ User identities and password/credential columns are not added.
 
 ## Inspection and isolated-test status
 
-The preceding read-only inspection of the connected Supabase project found no
-application objects in `public`; managed schemas were present. The connection
-role bypassed RLS. That does not make the project disposable.
+The retained read-only inspection of the connected Supabase project reported no
+application objects in `public`; managed schemas were present, and the inspected
+connection role bypassed RLS. Those are historical findings, not a current
+inspection of Supabase.
 
-During preparation, neither `TEST_DATABASE_URL` nor
-`STOCKWISE_TEST_DATABASE_URL` was configured as a dedicated secret. Local
-PostgreSQL 16 tools were found, but no disposable test database was provisioned
-or approved. No local cluster, cloud database, test schema or test role was
-created. No migration or mutating test was executed anywhere.
+`test-reports/local-postgresql17.md` records 58 grouped checks against the
+prepared `0001_inventory.sql` in a disposable PostgreSQL 17.6 cluster.
+`test-reports/prerequisites-postgresql17.md` records 40 grouped checks against
+the then-current role prerequisite SQL and unchanged migration. Both reports
+say their temporary clusters were stopped and removed; neither is a Supabase
+deployment result.
 
-The connected Supabase database is not a test fallback. Do not use DATABASE_URL
-as an implicit test target. The first actual migration test must use an explicitly
-identified, separately approved database. Supabase uses PostgreSQL 17; a local
-16-only test would not replace verification on the intended server version.
+The product-read SQL and role-provisioning proposals were prepared later. Their
+review explicitly says they were not executed or tested. No current database or
+Supabase state was inspected for this update.
+
+The connected Supabase database is not a test fallback. Do not use
+`DATABASE_URL` as an implicit test target. Any future database-changing test
+requires an explicitly identified and separately approved isolated database.
 
 ## Review-only instructions
 
