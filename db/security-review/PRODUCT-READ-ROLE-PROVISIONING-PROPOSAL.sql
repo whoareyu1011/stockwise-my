@@ -40,6 +40,12 @@
 --
 -- Exact role grants proposed here:
 --   stockwise_migrator -> each owner role, SET only (no INHERIT, no ADMIN).
+--   The approved non-superuser provisioner -> stockwise_migrator path has two
+--     direct PostgreSQL 17 rows with different grantors: the automatic creator
+--     edge is ADMIN-only, and the explicit operator-granted edge is SET-only;
+--     both have INHERIT disabled. No other member may assume the migrator.
+--     This proposal rejects superuser provisioners so the reviewed creator
+--     and operator membership rows have one explicit expected shape.
 --   stockwise_auth_owner -> USAGE on stockwise/auth schemas; REFERENCES on
 --     companies.id and auth.users.id; EXECUTE on auth.uid().
 --   stockwise_product_reader -> no table grants here. The separate product
@@ -94,9 +100,9 @@ BEGIN
 
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_roles
-    WHERE rolname = current_user AND (rolsuper OR rolcreaterole)
+    WHERE rolname = current_user AND rolcreaterole AND NOT rolsuper
   ) THEN
-    RAISE EXCEPTION 'Provisioner needs approved CREATEROLE authority';
+    RAISE EXCEPTION 'Use the approved non-superuser CREATEROLE provisioner';
   END IF;
 
   IF pg_catalog.to_regrole('stockwise_owner') IS NULL
@@ -140,49 +146,104 @@ BEGIN
      OR NOT pg_catalog.pg_has_role('stockwise_migrator','stockwise_owner','SET') THEN
     RAISE EXCEPTION 'Provisioner and migrator must have the reviewed owner SET path';
   END IF;
-  IF (
-    SELECT count(*)
-    FROM pg_catalog.pg_auth_members AS m
-    WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-  ) <> 1 OR EXISTS (
+  IF NOT EXISTS (
     SELECT 1
     FROM pg_catalog.pg_auth_members AS m
     WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-      AND (
-        m.roleid <> pg_catalog.to_regrole('stockwise_owner')
-        OR m.admin_option OR m.inherit_option OR NOT m.set_option
-      )
+      AND m.roleid = pg_catalog.to_regrole('stockwise_owner')
+      AND m.grantor = pg_catalog.to_regrole(current_user)
+      AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option
+  ) OR EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
+      AND (m.roleid <> pg_catalog.to_regrole('stockwise_owner')
+           OR m.grantor <> pg_catalog.to_regrole(current_user)
+           OR m.admin_option OR m.inherit_option OR NOT m.set_option)
   ) THEN
     RAISE EXCEPTION 'Existing migrator membership must be only SET access to stockwise_owner';
   END IF;
 
+  -- PostgreSQL 17 permits separate pg_auth_members rows for the same
+  -- (roleid, member) pair when different grantors created the edges. Preserve
+  -- the expected creator ADMIN row and explicit SET row; do not collapse them.
   IF EXISTS (
     SELECT 1
     FROM pg_catalog.pg_auth_members AS m
-    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
-      AND m.member <> pg_catalog.to_regrole(current_user)
+    WHERE m.member = pg_catalog.to_regrole('stockwise_owner')
+       OR m.grantor = pg_catalog.to_regrole('stockwise_migrator')
+       OR (m.member = pg_catalog.to_regrole('stockwise_migrator')
+           AND m.roleid <> pg_catalog.to_regrole('stockwise_owner'))
+       OR (m.roleid = pg_catalog.to_regrole('stockwise_owner')
+           AND m.member NOT IN (
+             pg_catalog.to_regrole(current_user),
+             pg_catalog.to_regrole('stockwise_migrator')
+           ))
+       OR (m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+           AND m.member <> pg_catalog.to_regrole(current_user))
   ) OR EXISTS (
     SELECT 1
     FROM pg_catalog.pg_auth_members AS m
+    WHERE (m.roleid = pg_catalog.to_regrole('stockwise_owner')
+           AND m.member = pg_catalog.to_regrole('stockwise_migrator')
+           AND (m.admin_option OR m.inherit_option OR NOT m.set_option))
+       OR (m.roleid IN (
+             pg_catalog.to_regrole('stockwise_owner'),
+             pg_catalog.to_regrole('stockwise_migrator')
+           )
+           AND m.member = pg_catalog.to_regrole(current_user)
+           AND (
+             m.inherit_option
+             OR (m.grantor = pg_catalog.to_regrole(current_user)
+                 AND (m.roleid <> pg_catalog.to_regrole('stockwise_migrator')
+                      OR m.admin_option OR NOT m.set_option))
+             OR (m.grantor <> pg_catalog.to_regrole(current_user)
+                 AND (NOT m.admin_option OR m.set_option))
+           ))
+  ) OR (
+    SELECT count(*)
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_owner')
+      AND m.member = pg_catalog.to_regrole(current_user)
+  ) <> 1 OR (
+    SELECT count(*)
+    FROM pg_catalog.pg_auth_members AS m
     WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
       AND m.member = pg_catalog.to_regrole(current_user)
-      AND (NOT m.admin_option OR m.inherit_option OR NOT m.set_option)
-  ) OR (
-    NOT EXISTS (
-      SELECT 1 FROM pg_catalog.pg_roles
-      WHERE rolname = current_user AND rolsuper
-    )
-    AND NOT EXISTS (
-      SELECT 1
-      FROM pg_catalog.pg_auth_members AS m
-      WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
-        AND m.member = pg_catalog.to_regrole(current_user)
-        AND m.admin_option
-        AND NOT m.inherit_option
-        AND m.set_option
-    )
+  ) <> 2
+     OR NOT EXISTS (
+       SELECT 1
+       FROM pg_catalog.pg_auth_members AS owner_creator
+       JOIN pg_catalog.pg_auth_members AS migrator_creator
+         ON migrator_creator.grantor = owner_creator.grantor
+       WHERE owner_creator.roleid = pg_catalog.to_regrole('stockwise_owner')
+         AND owner_creator.member = pg_catalog.to_regrole(current_user)
+          AND owner_creator.grantor NOT IN (
+            pg_catalog.to_regrole('stockwise_owner'),
+            pg_catalog.to_regrole('stockwise_migrator')
+          )
+         AND owner_creator.admin_option
+         AND NOT owner_creator.inherit_option
+         AND NOT owner_creator.set_option
+         AND migrator_creator.roleid = pg_catalog.to_regrole('stockwise_migrator')
+         AND migrator_creator.member = pg_catalog.to_regrole(current_user)
+         AND migrator_creator.grantor <> pg_catalog.to_regrole(current_user)
+         AND migrator_creator.admin_option
+         AND NOT migrator_creator.inherit_option
+         AND NOT migrator_creator.set_option
+     )
+     OR NOT EXISTS (
+       SELECT 1
+       FROM pg_catalog.pg_auth_members AS operator_set
+       WHERE operator_set.roleid = pg_catalog.to_regrole('stockwise_migrator')
+         AND operator_set.member = pg_catalog.to_regrole(current_user)
+         AND operator_set.grantor = pg_catalog.to_regrole(current_user)
+         AND NOT operator_set.admin_option
+         AND NOT operator_set.inherit_option
+         AND operator_set.set_option
+     )
   ) THEN
-    RAISE EXCEPTION 'Provisioner must be the sole approved migrator member with ADMIN, SET, and no INHERIT';
+    RAISE EXCEPTION 'Existing deployment membership graph/options differ from the reviewed PostgreSQL 17 setup';
   END IF;
 
   IF NOT pg_catalog.has_table_privilege(
@@ -239,9 +300,12 @@ CREATE ROLE stockwise_product_reader
   NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
   NOREPLICATION NOBYPASSRLS;
 
--- The creator's PostgreSQL role-creation membership is intentionally not
--- revoked. Its exact grantor/options are target-version dependent and must be
--- inspected. The creator is a trusted role administrator, not a runtime role.
+-- The creator's PostgreSQL role-creation ADMIN membership is intentionally
+-- retained. In the reviewed PostgreSQL 17 setup its grantor is not the
+-- provisioner, and its INHERIT/SET options are false. The postflight checks
+-- those direct catalog rows and aborts on a different grantor/options shape;
+-- it does not normalize or revoke creator memberships.
+-- The creator is a trusted role administrator, not a runtime role.
 GRANT stockwise_auth_owner TO stockwise_migrator
   WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 GRANT stockwise_product_reader TO stockwise_migrator
@@ -315,36 +379,49 @@ BEGIN
   END IF;
 
   -- Validate direct catalog edges, not merely transitive pg_has_role results.
-  -- For PostgreSQL 17, pg_auth_members has one row per direct (member, roleid)
-  -- edge and explicit ADMIN/INHERIT/SET options. The expected memberships
-  -- granted to stockwise_migrator are exactly stockwise_owner,
-  -- stockwise_auth_owner, and stockwise_product_reader, all SET-only.
+  -- PostgreSQL 17 can store multiple rows for a (roleid, member) pair when
+  -- grantors differ. Require the exact three expected grantor/role rows instead
+  -- of treating that pair as unique: the provisioner grants all three edges.
   IF (
     SELECT count(*)
     FROM pg_catalog.pg_auth_members AS m
     WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-  ) <> 3 OR EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_auth_members AS m
-    WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-      AND m.roleid NOT IN (
+      AND m.grantor = pg_catalog.to_regrole(session_user)
+      AND m.roleid IN (
         pg_catalog.to_regrole('stockwise_owner'),
         pg_catalog.to_regrole('stockwise_auth_owner'),
         pg_catalog.to_regrole('stockwise_product_reader')
       )
-  ) OR EXISTS (
+      AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option
+  ) <> 3 OR (
+    SELECT count(DISTINCT m.roleid)
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.grantor = pg_catalog.to_regrole(session_user)
+      AND m.roleid IN (
+        pg_catalog.to_regrole('stockwise_owner'),
+        pg_catalog.to_regrole('stockwise_auth_owner'),
+        pg_catalog.to_regrole('stockwise_product_reader')
+      )
+  ) <> 3 OR EXISTS (
     SELECT 1
     FROM pg_catalog.pg_auth_members AS m
     WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-      AND (m.admin_option OR m.inherit_option OR NOT m.set_option)
+      AND (m.grantor <> pg_catalog.to_regrole(session_user)
+           OR m.roleid NOT IN (
+             pg_catalog.to_regrole('stockwise_owner'),
+             pg_catalog.to_regrole('stockwise_auth_owner'),
+             pg_catalog.to_regrole('stockwise_product_reader')
+           )
+           OR m.admin_option OR m.inherit_option OR NOT m.set_option)
   ) THEN
     RAISE EXCEPTION 'Migrator must have exactly three direct SET-only memberships and no others';
   END IF;
 
-  -- Memberships granted TO the two new owner roles must consist only of the
-  -- migrator's SET-only edge and, for a non-superuser creator, PostgreSQL's
-  -- expected ADMIN-only creator edge. Any other member or option combination
-  -- aborts. Superusers need no automatic creator membership.
+  -- Each new owner receives one operator-created SET-only edge for the
+  -- migrator, and one PostgreSQL creator ADMIN-only edge from the same
+  -- non-operator grantor recorded on the existing stockwise_owner creator edge.
+  -- Reject extra incoming members, grantors, or options.
   IF (
     SELECT count(*)
     FROM pg_catalog.pg_auth_members AS m
@@ -352,58 +429,97 @@ BEGIN
       pg_catalog.to_regrole('stockwise_auth_owner'),
       pg_catalog.to_regrole('stockwise_product_reader')
     )
-  ) <> 2 + CASE
-       WHEN EXISTS (
-         SELECT 1 FROM pg_catalog.pg_roles AS r
-         WHERE r.rolname = session_user AND r.rolsuper
-       ) THEN 0 ELSE 2 END
-     OR EXISTS (
-       SELECT 1
-       FROM pg_catalog.pg_auth_members AS m
-       WHERE m.roleid IN (
-         pg_catalog.to_regrole('stockwise_auth_owner'),
-         pg_catalog.to_regrole('stockwise_product_reader')
-       )
-         AND NOT (
-           (m.member = pg_catalog.to_regrole('stockwise_migrator')
-            AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option)
-           OR
-           (m.member = pg_catalog.to_regrole(session_user)
-            AND EXISTS (
-              SELECT 1 FROM pg_catalog.pg_roles AS r
-              WHERE r.rolname = session_user AND NOT r.rolsuper
-            )
-            AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option)
+  ) <> 4 OR EXISTS (
+    SELECT required.role_oid
+    FROM (VALUES
+      (pg_catalog.to_regrole('stockwise_auth_owner')),
+      (pg_catalog.to_regrole('stockwise_product_reader'))
+    ) AS required(role_oid)
+    WHERE (
+      SELECT count(*)
+      FROM pg_catalog.pg_auth_members AS m
+      WHERE m.roleid = required.role_oid
+        AND m.member = pg_catalog.to_regrole('stockwise_migrator')
+        AND m.grantor = pg_catalog.to_regrole(session_user)
+        AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option
+    ) <> 1 OR (
+      SELECT count(*)
+      FROM pg_catalog.pg_auth_members AS m
+      WHERE m.roleid = required.role_oid
+        AND m.member = pg_catalog.to_regrole(session_user)
+        AND m.grantor = (
+          SELECT base.grantor
+          FROM pg_catalog.pg_auth_members AS base
+          WHERE base.roleid = pg_catalog.to_regrole('stockwise_owner')
+            AND base.member = pg_catalog.to_regrole(session_user)
+            AND base.admin_option
+            AND NOT base.inherit_option
+            AND NOT base.set_option
+        )
+        AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option
+    ) <> 1
+  ) OR EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid IN (
+      pg_catalog.to_regrole('stockwise_auth_owner'),
+      pg_catalog.to_regrole('stockwise_product_reader')
+    )
+      AND NOT (
+        (m.member = pg_catalog.to_regrole('stockwise_migrator')
+         AND m.grantor = pg_catalog.to_regrole(session_user)
+         AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option)
+        OR
+        (m.member = pg_catalog.to_regrole(session_user)
+         AND m.grantor = (
+           SELECT base.grantor
+           FROM pg_catalog.pg_auth_members AS base
+           WHERE base.roleid = pg_catalog.to_regrole('stockwise_owner')
+             AND base.member = pg_catalog.to_regrole(session_user)
+             AND base.admin_option
+             AND NOT base.inherit_option
+             AND NOT base.set_option
          )
-     ) THEN
-    RAISE EXCEPTION 'Unexpected direct membership granted to a function-owner role';
+         AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option)
+      )
+  ) THEN
+    RAISE EXCEPTION 'Function-owner membership rows differ from the exact PostgreSQL 17 grantor/options design';
   END IF;
 
-  -- A protected owner must not itself be a member of another role or grant
-  -- role membership to anyone. Check both pg_auth_members directions and the
-  -- grantor field; pg_has_role alone cannot prove these direct-edge invariants.
+  -- No function-owner role may itself be a member, or be the grantor, of
+  -- another role. This checks the member and grantor columns, not just
+  -- effective membership returned by pg_has_role.
   IF EXISTS (
     SELECT 1
     FROM pg_catalog.pg_auth_members AS m
     WHERE m.member IN (
       pg_catalog.to_regrole('stockwise_auth_owner'),
       pg_catalog.to_regrole('stockwise_product_reader')
-    )
-  ) OR EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_auth_members AS m
-    WHERE m.grantor IN (
+    ) OR m.grantor IN (
       pg_catalog.to_regrole('stockwise_auth_owner'),
       pg_catalog.to_regrole('stockwise_product_reader')
     )
   ) THEN
     RAISE EXCEPTION 'A function-owner role has an outgoing membership or is a membership grantor';
   END IF;
-
-  -- Only the approved operator may be a direct member of the migrator role.
-  -- A non-superuser operator must have exact ADMIN+SET, non-INHERIT options;
-  -- a superuser may have no membership edge because superusers can assume it.
   IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.grantor = pg_catalog.to_regrole('stockwise_migrator')
+  ) THEN
+    RAISE EXCEPTION 'stockwise_migrator must not grant memberships to other roles';
+  END IF;
+
+  -- Preserve both expected operator->migrator rows: the creator ADMIN row
+  -- (from the same non-operator grantor as the stockwise_owner creator edge)
+  -- and the explicit operator-granted SET row. Other members,
+  -- duplicate/unexpected grantor rows, or option changes fail.
+  IF (
+    SELECT count(*)
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.member = pg_catalog.to_regrole(session_user)
+  ) <> 2 OR EXISTS (
     SELECT 1
     FROM pg_catalog.pg_auth_members AS m
     WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
@@ -413,22 +529,46 @@ BEGIN
     FROM pg_catalog.pg_auth_members AS m
     WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
       AND m.member = pg_catalog.to_regrole(session_user)
-      AND (NOT m.admin_option OR m.inherit_option OR NOT m.set_option)
-  ) OR (
-    NOT EXISTS (
-      SELECT 1 FROM pg_catalog.pg_roles AS r
-      WHERE r.rolname = session_user AND r.rolsuper
-    )
-    AND NOT EXISTS (
-      SELECT 1
-      FROM pg_catalog.pg_auth_members AS m
-      WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
-        AND m.member = pg_catalog.to_regrole(session_user)
-        AND m.admin_option AND NOT m.inherit_option AND m.set_option
-    )
+      AND NOT (
+        (m.grantor = pg_catalog.to_regrole(session_user)
+         AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option)
+        OR
+        (m.grantor = (
+           SELECT base.grantor
+           FROM pg_catalog.pg_auth_members AS base
+           WHERE base.roleid = pg_catalog.to_regrole('stockwise_owner')
+             AND base.member = pg_catalog.to_regrole(session_user)
+             AND base.admin_option
+             AND NOT base.inherit_option
+             AND NOT base.set_option
+         )
+         AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option)
+      )
+  ) OR NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.member = pg_catalog.to_regrole(session_user)
+      AND m.grantor = pg_catalog.to_regrole(session_user)
+      AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option
+  ) OR NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.member = pg_catalog.to_regrole(session_user)
+      AND m.grantor = (
+        SELECT base.grantor
+        FROM pg_catalog.pg_auth_members AS base
+        WHERE base.roleid = pg_catalog.to_regrole('stockwise_owner')
+          AND base.member = pg_catalog.to_regrole(session_user)
+          AND base.admin_option
+          AND NOT base.inherit_option
+          AND NOT base.set_option
+      )
+      AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option
   ) OR NOT pg_catalog.pg_has_role(
        session_user,'stockwise_migrator','SET') THEN
-    RAISE EXCEPTION 'Migrator membership is not limited to the approved operator path';
+    RAISE EXCEPTION 'Migrator/operator memberships differ from the reviewed PostgreSQL 17 grantor/options design';
   END IF;
 
   IF NOT pg_catalog.has_schema_privilege(
@@ -563,73 +703,6 @@ BEGIN
         'stockwise_auth_owner',p.oid,'EXECUTE')
   ) THEN
     RAISE EXCEPTION 'Auth owner can execute additional auth functions; review managed ACLs';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_auth_members AS m
-    JOIN pg_catalog.pg_roles AS granted ON granted.oid = m.roleid
-    JOIN pg_catalog.pg_roles AS member_role ON member_role.oid = m.member
-    WHERE granted.rolname IN ('stockwise_auth_owner','stockwise_product_reader')
-      AND member_role.rolname IN ('anon','authenticated','service_role','authenticator')
-  ) THEN
-    RAISE EXCEPTION 'A Supabase API role can assume a proposed owner role';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_auth_members AS m
-    JOIN pg_catalog.pg_roles AS granted ON granted.oid = m.roleid
-    JOIN pg_catalog.pg_roles AS member_role ON member_role.oid = m.member
-    WHERE granted.rolname IN ('stockwise_auth_owner','stockwise_product_reader')
-      AND member_role.rolname <> 'stockwise_migrator'
-      AND (m.inherit_option OR m.set_option)
-  ) THEN
-    RAISE EXCEPTION 'Unexpected non-migrator role inherits or can SET an object-owner role';
-  END IF;
-
-  IF (
-    SELECT count(*)
-    FROM pg_catalog.pg_auth_members AS m
-    WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-      AND m.roleid IN (
-        pg_catalog.to_regrole('stockwise_auth_owner'),
-        pg_catalog.to_regrole('stockwise_product_reader')
-      )
-  ) <> 2 OR EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_auth_members AS m
-    WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-      AND m.roleid IN (
-        pg_catalog.to_regrole('stockwise_auth_owner'),
-        pg_catalog.to_regrole('stockwise_product_reader')
-      )
-      AND (m.admin_option OR m.inherit_option OR NOT m.set_option)
-  ) THEN
-    RAISE EXCEPTION 'Migrator must have exactly the two proposed SET-only role edges';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_auth_members AS m
-    JOIN pg_catalog.pg_roles AS granted ON granted.oid = m.roleid
-    JOIN pg_catalog.pg_roles AS member_role ON member_role.oid = m.member
-    WHERE granted.rolname IN ('stockwise_auth_owner','stockwise_product_reader')
-      AND member_role.rolname <> 'stockwise_migrator'
-      AND member_role.rolname <> session_user::text
-  ) THEN
-    RAISE EXCEPTION 'Unexpected role is a member of a proposed owner role';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_auth_members AS m
-    JOIN pg_catalog.pg_roles AS granted ON granted.oid = m.roleid
-    WHERE granted.rolname IN ('stockwise_auth_owner','stockwise_product_reader')
-      AND m.member = pg_catalog.to_regrole(session_user)
-      AND (NOT m.admin_option OR m.inherit_option OR m.set_option)
-  ) THEN
-    RAISE EXCEPTION 'Operator creator membership differs from expected ADMIN-only behavior';
   END IF;
 
   IF EXISTS (

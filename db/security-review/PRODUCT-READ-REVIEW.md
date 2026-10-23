@@ -9,28 +9,60 @@ the SQL or that the proposed checks pass in Supabase.
 
 | # | Review finding | Source correction | Status / remaining limitation |
 | --- | --- | --- | --- |
-| 1 | Effective privileges and role-membership closure | The product proposal computes transitive API-role membership and checks effective schema, relation, column, sequence, and function privileges before changes. It rejects protected-role reachability and verifies the intended grants afterward. | Addressed in source; target role graph and ACLs are unverified until the preflight/postflight are run in an approved isolated database. |
+| 1 | Effective privileges and role-membership closure | The product proposal checks transitive API-role reachability and effective object privileges for the four standard API roles. Both proposals now inspect direct `pg_auth_members` rows, including grantor and option fields, rather than assuming one row per `(roleid, member)` pair. | Partially addressed in source. The checks are unexecuted, custom Data API roles/exposed schemas remain outside the SQL-visible scope, and the target's exact grantor/options rows must match the fail-closed expectations. |
 | 2 | Privileged deployment roles | Both proposals state that the migrator can `SET ROLE` into function owners and that the role-creating operator can administer memberships. The migrator/operator are trusted privileged identities, not an RPC-only boundary. | Explicitly documented, not technically prevented. Keep those credentials out of application requests; actual grants and credential handling remain target-specific and unverified. |
-| 3 | Membership-owner RLS bypass and administration | Membership operations are not exposed through the API and are explicitly blocked until an approved audit control or independently verified privileged operational procedure exists. | The block is a process requirement, not a database-enforced audit trail. A trusted operator/migrator can still change or delete rows; no membership write or first-Owner procedure is approved here. |
+| 3 | Membership-owner RLS bypass and administration | Membership operations are not exposed through the API and remain blocked until an approved audit control or independently verified privileged operational procedure exists. | Unresolved. This is an operational stop condition, not a database-enforced audit trail. A trusted operator/migrator can still change or delete rows; no membership write or first-Owner procedure is approved here. |
 | 4 | Permissive RLS policy composition | Each protected table gets a permissive reader policy plus a restrictive company-membership guard. Both the RPC and policies call the same active-membership helper and the RPC rejects roles outside Owner/Admin/Staff/Viewer. | Company checks are repeated at separate call sites but share one trust point; they are not independent implementations. Later policy/DDL changes could still remove or alter the restrictive guard. |
 | 5 | Existing ACL drift | The product proposal checks current effective privileges and fails closed before the DDL instead of broadly revoking unknown grants from existing `stockwise` objects. New schemas receive explicit revocations; postflight verifies the intended API surface. | Addressed in source. The effective ACL catalog checks have not been run, and unmodeled managed objects/privileges may require revision. |
 | 6 | Owner default function privileges | The product proposal requires explicit global function-default hardening for all three function-owner roles, rejects PUBLIC or named-role EXECUTE defaults, grants by exact signatures, and postflights owners, `SECURITY DEFINER`, fixed `search_path`, and PUBLIC ACLs. | Addressed in source. The prerequisite's actual application and resulting defaults/ACLs are unknown until inspected in the intended database. |
-| 7 | Provisioning roles and Supabase prerequisites | Added a separate review-only SQL proposal for `stockwise_auth_owner` and `stockwise_product_reader`, including restricted role attributes, SET-only migrator memberships, and narrowly described grants. | Addressed as a proposal only. PostgreSQL version, role-creation behavior, Auth schema ACLs, and grant authority must be verified on the intended target. |
+| 7 | Provisioning roles and Supabase prerequisites | Added a separate review-only SQL proposal for `stockwise_auth_owner` and `stockwise_product_reader`, including restricted role attributes, exact direct membership checks, and narrowly described grants. | Partially addressed as a proposal only. PostgreSQL version, automatic creator-membership behavior/options, Auth schema ACLs, and grant authority must be verified on the intended target. The postflight aborts on an unexpected membership graph; it does not normalize one. |
 | 8 | Unexpected membership roles | The RPC rejects null or unexpected membership roles before returning rows; the authorization branch no longer treats unknown roles as Viewer. | Addressed in source. Database execution and negative tests remain outstanding. |
 
 ## Latest independent-review remediation
 
 | Finding | Source location | Correction/status |
 | --- | --- | --- |
-| Required database/schema authority was not explicit | `PRODUCT-READ-PROPOSAL.sql:128–135, 175–185, 710–725`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:118–128, 165–175, 201–208, 258–291` | Added fail-closed checks for target-database CREATE on `stockwise_migrator`, absence of that privilege on protected/API roles, and grant authority for `stockwise` schema USAGE. These do not grant privileges. Target values remain unknown. |
-| Role-attribute checks omitted REPLICATION/API administration flags | `PRODUCT-READ-PROPOSAL.sql:142–174, 685–708`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:108–113, 184–208, 249–276` | Added REPLICATION checks for StockWise roles and rejected SUPERUSER, CREATEROLE, CREATEDB, and REPLICATION on standard API roles. `service_role` may retain BYPASSRLS; `anon`, `authenticated`, and `authenticator` may not. `authenticator` may be LOGIN; the other three API roles may not. Not executed. |
-| RPC/RLS use one shared membership helper | `PRODUCT-READ-PROPOSAL.sql:527–550, 565–584, 619`; `PRODUCT-READ-REVIEW.md:61–64` | Corrected the description: multiple enforcement call sites share one authorization trust point. Focused review and negative tests remain required. |
-| Membership lifecycle lacked a database audit control | `PRODUCT-READ-PROPOSAL.sql:45–49, 507–525`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:31–34`; `PRODUCT-READ-REVIEW.md:103–117` | Explicitly blocks membership creation, role changes, deactivation, deletion, and first-Owner provisioning until an approved audit control or independently verified privileged process exists. There is no membership-write endpoint. Privileged operators can still mutate the table; the block is operational, not enforced by this SQL. |
-| Privileged operator/migrator path | `PRODUCT-READ-PROPOSAL.sql:18–33, 136–139, 248–268, 674–678`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:12–34, 219–221` | Explicitly states that trusted provisioning/migration operators can exercise privileged access outside the product RPC. No claim is made that the RPC technically prevents that access. |
-| Actual Data API exposure and callable roles were not established | `PRODUCT-READ-PROPOSAL.sql:39–43`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:35–37`; `PRODUCT-READ-REVIEW.md:108–115` | Requires independent target evidence for exposed schemas, callable roles, membership closure, and effective grants. The Dashboard configuration is not inspectable by these SQL files. |
-| PostgreSQL/Auth/Data API behavior remains unverified | `PRODUCT-READ-PROPOSAL.sql:51–54, 67–77`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:60–62, 84–100`; `PRODUCT-READ-REVIEW.md:87–119` | Version, Supabase Auth grants/identity propagation, catalog behavior, and Data API behavior remain assumptions until verified in an approved isolated or hosted target. |
-| Explicit global function-default hardening must cover each function owner | `PRODUCT-READ-PROPOSAL.sql:333–366`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:532–562` | The product preflight now requires explicit hardening for the existing owner and both new function owners; the provisioning postflight checks the new owners. Effective target ACLs remain unverified. |
-| Helper overload and PUBLIC EXECUTE checks were incomplete | `PRODUCT-READ-PROPOSAL.sql:863–924` | Added an exact one-function count and signature-resolution check for the private membership helper, and a catalog ACL check rejecting PUBLIC EXECUTE on either security function. Effective named-role access checks remain in place. Not executed. |
+| Required database/schema authority was not explicit | `PRODUCT-READ-PROPOSAL.sql:119–145, 175–190, 828`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:129–140, 252–260, 340–345` | Added fail-closed checks for target-database CREATE on `stockwise_migrator`, absence of that privilege on protected/API roles, and grant authority for `stockwise` schema USAGE. These do not grant privileges. Target values remain unknown. |
+| Role-attribute checks omitted REPLICATION/API administration flags | `PRODUCT-READ-PROPOSAL.sql:148–180, 790–828`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:119–127, 252–276, 320–330` | Added REPLICATION checks for StockWise roles and rejected SUPERUSER, CREATEROLE, CREATEDB, and REPLICATION on standard API roles. `service_role` may retain BYPASSRLS; `anon`, `authenticated`, and `authenticator` may not. `authenticator` may be LOGIN; the other three API roles may not. Not executed. |
+| RPC/RLS use one shared membership helper | `PRODUCT-READ-PROPOSAL.sql:610–683, 697–767`; this review's “Static review and limitations” section | Clarified that multiple enforcement call sites share one authorization trust point. Focused review and negative tests remain required. |
+| Membership lifecycle lacked a database audit control | `PRODUCT-READ-PROPOSAL.sql:45–49, 610–629`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:31–36`; this review's “Latest correction” section | Explicitly blocks membership creation, role changes, deactivation, deletion, and first-Owner provisioning until an approved audit control or independently verified privileged process exists. There is no membership-write endpoint. Privileged operators can still mutate the table; the block is operational, not enforced by this SQL. |
+| Privileged operator/migrator path | `PRODUCT-READ-PROPOSAL.sql:18–33, 119–145, 351–372, 697–767`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:7–36` | Explicitly states that trusted provisioning/migration operators can exercise privileged access outside the product RPC. No claim is made that the RPC technically prevents that access. |
+| Actual Data API exposure and callable roles were not established | `PRODUCT-READ-PROPOSAL.sql:39–54`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:37–39`; this review's “Remaining assumptions and blockers” section | Requires independent target evidence for exposed schemas, callable roles, membership closure, and effective grants. The Dashboard configuration is not inspectable by these SQL files. |
+| PostgreSQL/Auth/Data API behavior remains unverified | `PRODUCT-READ-PROPOSAL.sql:51–77`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:58–73`; historical artifacts cited below | Version, Supabase Auth grants/identity propagation, catalog behavior, and Data API behavior remain assumptions until verified in an approved isolated or hosted target. |
+| Explicit global function-default hardening must cover each function owner | `PRODUCT-READ-PROPOSAL.sql:430–456`; `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:286–297, 640–648` | The product preflight now requires explicit hardening for the existing owner and both new function owners; the provisioning postflight checks the new owners. Effective target ACLs remain unverified. |
+| Helper overload and PUBLIC EXECUTE checks were incomplete | `PRODUCT-READ-PROPOSAL.sql:970–1022` | Added an exact one-function count and signature-resolution check for the private membership helper, and a catalog ACL check rejecting PUBLIC EXECUTE on either security function. Effective named-role access checks remain in place. Not executed. |
+| Provisioning preflight/postflight assumed membership-pair uniqueness and did not verify the complete role-membership graph | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:99–103, 147–213, 347–504`; `PRODUCT-READ-PROPOSAL.sql:141–355` | Revised both proposals to check grantor-specific `pg_auth_members` rows and `ADMIN`/`INHERIT`/`SET` options. The new role postflight checks the migrator's complete incoming set, rejects any membership granted by the migrator, verifies operator memberships, validates incoming edges to both new owner roles, and rejects outgoing/grantor edges involving them. These source checks are not executed. |
+
+## Latest correction: role-membership catalog review
+
+The source now distinguishes direct catalog membership edges from effective,
+possibly transitive membership:
+
+| Invariant | Source check | Limitation |
+| --- | --- | --- |
+| `stockwise_migrator` has exactly the three expected direct role memberships, each with `ADMIN=false`, `INHERIT=false`, `SET=true`, and the reviewed grantor; it grants no role memberships | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:348–385, 455–460`; `PRODUCT-READ-PROPOSAL.sql:274–314, 205–210` | The checks reject extra roles, grantors, or option combinations and any row with `stockwise_migrator` as grantor. They have not been run against a database. |
+| The non-superuser operator-to-migrator relation preserves both grantor-specific rows: automatic creator `ADMIN` only, and the explicit operator-granted `SET` only edge | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:165–213, 463–504`; `PRODUCT-READ-PROPOSAL.sql:318–355` | This matches the historical PostgreSQL 17 role report, but the current target's grantor OIDs and options remain unknown. |
+| Each function-owner role has only the migrator's explicit `SET` edge and the creator's automatic `ADMIN`-only edge; neither protected role is a member or grantor for another role | `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:388–460` | The code requires the expected grantor/options shape and aborts otherwise. The newly proposed roles have not been tested on PostgreSQL. |
+
+The proposals rely on the PostgreSQL 17 catalog fields and role-membership
+options declared in `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:65–73`.
+`pg_auth_members` may contain multiple rows for the same `(roleid, member)` pair
+when the grantors differ; the checks retain and validate grantor-specific rows.
+`pg_has_role` is supplementary and does not establish the exact edge set. The
+retained historical report documents two rows for the operator's membership in
+`stockwise_migrator`, with different grantors and different options
+(`db/deployment/README.md:72–99`;
+`db/test-reports/prerequisites-postgresql17.md:103–118`). That historical run
+covered the earlier deployment-role setup, not these modified proposals or the
+current Supabase target. The new-role checks intentionally fail closed if the
+current target's creator edges differ; no membership behavior was verified in
+this task.
+
+Membership creation, role changes, deactivation, deletion, and first-Owner
+provisioning remain process-blocked only. The SQL does not install an audit
+trigger or prevent a trusted owner/migrator from changing membership records;
+see `PRODUCT-READ-ROLE-PROVISIONING-PROPOSAL.sql:31–36` and
+`PRODUCT-READ-PROPOSAL.sql:45–49`.
 
 ## Source files
 
@@ -77,6 +109,10 @@ Static review of the proposal source confirmed:
   target-environment check.
 - The provisioning proposal does not grant API/runtime membership, login,
   `BYPASSRLS`, or product table access to the new roles.
+- The provisioning postflight checks the full direct membership set of
+  `stockwise_migrator`, the direct operator edge/options, the permitted incoming
+  edges to the new function-owner roles, and disallows those owner roles from
+  being members or grantors. These are checks in source only.
 - The privileged operator/migrator boundary remains explicit. Membership
   lifecycle changes and first-Owner provisioning are blocked by process until
   approved audit controls or independently verified privileged procedures exist.
@@ -97,6 +133,8 @@ Before any isolated database test or hosted execution:
    attributes, effective grants, function ACLs, and default ACLs. Include every
    role that can be selected by the Data API, not only the four standard names.
    The proposal intentionally aborts rather than repairing unknown access.
+   Independently verify that actual PostgreSQL 17 `pg_auth_members` rows and
+   automatic creator-membership options satisfy the stated exact expectations.
 4. Verify the approved operator can assume `stockwise_migrator`, and that the
    migrator has exactly SET-only memberships in all three object-owner roles;
    verify its target-database CREATE and `stockwise_owner`'s schema-USAGE grant
@@ -117,7 +155,8 @@ Before any isolated database test or hosted execution:
    `stockwise` data; this proposal does not attempt to prove the absence of
    dynamic-SQL or cross-schema wrappers. Enumerate all callable roles, their
    role-membership closure, and effective grants, including custom JWT role
-   claims, before deployment.
+   claims, before deployment. The SQL proposals cannot verify these Dashboard
+   settings or prove which custom roles can be selected by hosted requests.
 8. Do not insert any membership, including the first Owner, until the audit
    control or privileged operational procedure has been approved and verified.
 9. Obtain independent review of the final SQL and target-specific role, Auth,
@@ -126,14 +165,40 @@ Before any isolated database test or hosted execution:
 No database tests, SQL execution, application tests, service restarts, network
 requests, or Supabase access were performed for this revision.
 
+## Source-verifiable findings versus target checks
+
+**Source-verifiable:** the exact signatures, proposed function owners and
+`SECURITY DEFINER` declarations, fixed search paths, explicit grant/revoke
+statements, membership helper logic, company-filtered join, role-specific field
+projection, direct `pg_auth_members` predicates, and the explicit operational
+block on membership lifecycle changes.
+
+**Not established from source:** current Data API exposed schemas; all callable
+roles and custom JWT role claims; actual/transitive effective privileges and
+ACLs; deployed PostgreSQL version and catalog rows; Supabase Auth object
+ownership/grants and `auth.uid()` behavior; validation and propagation of the
+same user JWT to the Data API; or whether hosted RLS sees the intended identity.
+Those require an approved target-specific review and controlled evidence.
+
+The product-read boundary remains RPC-only in the proposal: `authenticated`
+receives the exact `list_products` function grant, while the function owner has
+the underlying column access. Viewer field omission is performed by the RPC
+projection, not by role-specific RLS. This remains safe only if target exposure
+and grants prevent alternate base-table/view/function paths; that target
+condition is unresolved.
+
 ## Required later checks (NOT RUN)
 
 Only in a separately approved, genuinely isolated PostgreSQL 17 environment;
 all cases below are **NOT RUN**:
 
-- Verify role-creation automatic memberships and all direct/transitive
-  membership options; verify role attributes, the operator boundary, database
-  CREATE, schema grant authority, and all target Data API role closures.
+- Verify role-creation automatic memberships and every direct
+  `(roleid, member, grantor)` row and `ADMIN`/`INHERIT`/`SET` option. Include
+  negative cases for an extra membership, an extra grantor row, changed options,
+  membership granted by a protected function owner or migrator, and an
+  unexpected role member; each must abort and roll back. Verify role attributes,
+  the operator boundary, database CREATE, schema grant authority, and all
+  target Data API role closures.
 - Seed harmless synthetic companies, users, memberships, and products; test
   valid/forged/missing `auth.uid()` identity, same-company reads, cross-company
   denial, forged company selectors, pending/inactive/missing memberships, and
@@ -162,9 +227,12 @@ not establish Dashboard Data API exposure settings or hosted Supabase behavior.
 
 ## Decision
 
-**READY FOR A FURTHER INDEPENDENT SOURCE REVIEW ONLY.** The changes above are
-source and documentation corrections; this is not approval to execute either
-SQL proposal. Database setup, migration execution, deployment, business-data
-access, and endpoint implementation remain blocked pending target-specific
-prerequisites, an approved membership-audit/Owner-provisioning process, and
-independent review of the SQL and Supabase configuration.
+**NOT READY FOR CONTROLLED-TEST PLANNING.** The revised source has not received
+independent review or PostgreSQL execution. Target-specific role/catalog
+semantics, Data API exposed schemas and callable roles, effective privileges,
+Supabase Auth behavior, and JWT identity propagation remain unresolved.
+Membership lifecycle changes and first-Owner provisioning also remain blocked
+until an approved audit control or independently verified privileged process
+exists. These source corrections and static inspection do not establish
+readiness or authorize SQL execution, database setup, deployment, business-data
+access, or endpoint implementation.

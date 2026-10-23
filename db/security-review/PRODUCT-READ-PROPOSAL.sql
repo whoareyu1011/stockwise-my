@@ -138,6 +138,12 @@ BEGIN
                       'stockwise_auth_owner','stockwise_product_reader') THEN
     RAISE EXCEPTION 'Use the separately approved privileged deployment identity, not an API or object-owner role';
   END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles AS operator_role
+    WHERE operator_role.rolname = session_user AND operator_role.rolsuper
+  ) THEN
+    RAISE EXCEPTION 'Use the reviewed non-superuser deployment operator';
+  END IF;
 
   IF EXISTS (
     SELECT 1 FROM pg_catalog.pg_roles r
@@ -188,8 +194,20 @@ BEGIN
     FROM pg_catalog.pg_auth_members m
     JOIN pg_catalog.pg_roles target ON target.oid = m.member
     WHERE target.rolname IN ('stockwise_owner','stockwise_auth_owner','stockwise_product_reader')
+  ) OR EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members m
+    JOIN pg_catalog.pg_roles grantor ON grantor.oid = m.grantor
+    WHERE grantor.rolname IN ('stockwise_owner','stockwise_auth_owner','stockwise_product_reader')
   ) THEN
-    RAISE EXCEPTION 'Object-owner roles must not be members of other roles';
+    RAISE EXCEPTION 'Object-owner roles must not be members or membership grantors';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.grantor = pg_catalog.to_regrole('stockwise_migrator')
+  ) THEN
+    RAISE EXCEPTION 'stockwise_migrator must not grant memberships to other roles';
   END IF;
   IF EXISTS (
     SELECT 1
@@ -201,48 +219,175 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Supabase API roles must not be members of object-owner roles';
   END IF;
-  IF EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_auth_members m
-    JOIN pg_catalog.pg_roles granted ON granted.oid = m.roleid
-    JOIN pg_catalog.pg_roles member_role ON member_role.oid = m.member
-    WHERE granted.rolname IN ('stockwise_owner','stockwise_auth_owner','stockwise_product_reader')
-      AND member_role.rolname <> 'stockwise_migrator'
-      AND NOT (
-        member_role.rolname = session_user::text
-        AND m.admin_option
-        AND NOT m.inherit_option
-        AND NOT m.set_option
-      )
-  ) THEN
-    RAISE EXCEPTION 'Unexpected membership path into an object-owner role';
-  END IF;
+  -- PostgreSQL 17 pg_auth_members can contain several rows for a
+  -- (roleid, member) pair when grantors differ. Validate the grantor and each
+  -- option tuple explicitly rather than counting only distinct role pairs.
+  -- Each protected role must have exactly the migrator SET edge granted by
+  -- session_user and the creator ADMIN edge from the same non-operator grantor
+  -- recorded on stockwise_owner's existing creator membership.
   IF (
     SELECT count(*)
     FROM pg_catalog.pg_auth_members AS m
-    JOIN pg_catalog.pg_roles AS granted ON granted.oid = m.roleid
+    WHERE m.roleid IN (
+      pg_catalog.to_regrole('stockwise_owner'),
+      pg_catalog.to_regrole('stockwise_auth_owner'),
+      pg_catalog.to_regrole('stockwise_product_reader')
+    )
+  ) <> 6 OR EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid IN (
+      pg_catalog.to_regrole('stockwise_owner'),
+      pg_catalog.to_regrole('stockwise_auth_owner'),
+      pg_catalog.to_regrole('stockwise_product_reader')
+    )
+      AND NOT (
+        (m.member = pg_catalog.to_regrole('stockwise_migrator')
+         AND m.grantor = pg_catalog.to_regrole(session_user)
+         AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option)
+        OR
+        (m.member = pg_catalog.to_regrole(session_user)
+         AND m.grantor = (
+           SELECT base.grantor
+           FROM pg_catalog.pg_auth_members AS base
+           WHERE base.roleid = pg_catalog.to_regrole('stockwise_owner')
+             AND base.member = pg_catalog.to_regrole(session_user)
+             AND base.admin_option
+             AND NOT base.inherit_option
+             AND NOT base.set_option
+         )
+         AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option)
+      )
+  ) OR EXISTS (
+    SELECT 1
+    FROM (VALUES
+      (pg_catalog.to_regrole('stockwise_owner')),
+      (pg_catalog.to_regrole('stockwise_auth_owner')),
+      (pg_catalog.to_regrole('stockwise_product_reader'))
+    ) AS expected(role_oid)
+    WHERE (
+      SELECT count(*)
+      FROM pg_catalog.pg_auth_members AS m
+      WHERE m.roleid = expected.role_oid
+        AND m.member = pg_catalog.to_regrole('stockwise_migrator')
+        AND m.grantor = pg_catalog.to_regrole(session_user)
+        AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option
+    ) <> 1 OR (
+      SELECT count(*)
+      FROM pg_catalog.pg_auth_members AS m
+      WHERE m.roleid = expected.role_oid
+        AND m.member = pg_catalog.to_regrole(session_user)
+        AND m.grantor = (
+          SELECT base.grantor
+          FROM pg_catalog.pg_auth_members AS base
+          WHERE base.roleid = pg_catalog.to_regrole('stockwise_owner')
+            AND base.member = pg_catalog.to_regrole(session_user)
+            AND base.admin_option
+            AND NOT base.inherit_option
+            AND NOT base.set_option
+        )
+        AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option
+    ) <> 1
+  ) THEN
+    RAISE EXCEPTION 'Protected-role membership edges/grantors/options differ from the reviewed PostgreSQL 17 setup';
+  END IF;
+
+  -- Migrator must be a member of exactly the three protected roles, with the
+  -- approved grantor and SET-only options; test distinct roles, not assumed
+  -- uniqueness of (roleid, member) alone.
+  IF (
+    SELECT count(*)
+    FROM pg_catalog.pg_auth_members AS m
     WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-      AND granted.rolname IN (
-        'stockwise_owner','stockwise_auth_owner','stockwise_product_reader'
+      AND m.grantor = pg_catalog.to_regrole(session_user)
+      AND m.roleid IN (
+        pg_catalog.to_regrole('stockwise_owner'),
+        pg_catalog.to_regrole('stockwise_auth_owner'),
+        pg_catalog.to_regrole('stockwise_product_reader')
+      )
+      AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option
+  ) <> 3 OR (
+    SELECT count(DISTINCT m.roleid)
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.grantor = pg_catalog.to_regrole(session_user)
+      AND m.roleid IN (
+        pg_catalog.to_regrole('stockwise_owner'),
+        pg_catalog.to_regrole('stockwise_auth_owner'),
+        pg_catalog.to_regrole('stockwise_product_reader')
       )
   ) <> 3 OR EXISTS (
     SELECT 1
     FROM pg_catalog.pg_auth_members AS m
-    JOIN pg_catalog.pg_roles AS granted ON granted.oid = m.roleid
     WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-      AND granted.rolname IN (
-        'stockwise_owner','stockwise_auth_owner','stockwise_product_reader'
-      )
-      AND (m.admin_option OR m.inherit_option OR NOT m.set_option)
+      AND (m.grantor <> pg_catalog.to_regrole(session_user)
+           OR m.roleid NOT IN (
+             pg_catalog.to_regrole('stockwise_owner'),
+             pg_catalog.to_regrole('stockwise_auth_owner'),
+             pg_catalog.to_regrole('stockwise_product_reader')
+           )
+           OR m.admin_option OR m.inherit_option OR NOT m.set_option)
   ) THEN
-    RAISE EXCEPTION 'Migrator must have exactly three non-admin, non-inheriting SET memberships';
+    RAISE EXCEPTION 'Migrator must have exactly three reviewed grantor/options memberships';
   END IF;
+
+  -- The provisioner's automatic ADMIN edge and explicit SET edge into
+  -- stockwise_migrator have different grantors and must both be present. The
+  -- creator edge must use the same non-operator grantor as the existing
+  -- stockwise_owner creator edge.
   IF (
     SELECT count(*)
     FROM pg_catalog.pg_auth_members AS m
-    WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-  ) <> 3 THEN
-    RAISE EXCEPTION 'Migrator has unexpected additional role memberships';
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.member = pg_catalog.to_regrole(session_user)
+  ) <> 2 OR EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.member <> pg_catalog.to_regrole(session_user)
+  ) OR EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.member = pg_catalog.to_regrole(session_user)
+      AND NOT (
+        (m.grantor = pg_catalog.to_regrole(session_user)
+         AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option)
+        OR (m.grantor = (
+              SELECT base.grantor
+              FROM pg_catalog.pg_auth_members AS base
+              WHERE base.roleid = pg_catalog.to_regrole('stockwise_owner')
+                AND base.member = pg_catalog.to_regrole(session_user)
+                AND base.admin_option
+                AND NOT base.inherit_option
+                AND NOT base.set_option
+            )
+            AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option)
+      )
+  ) OR NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.member = pg_catalog.to_regrole(session_user)
+      AND m.grantor = pg_catalog.to_regrole(session_user)
+      AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option
+  ) OR NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.member = pg_catalog.to_regrole(session_user)
+      AND m.grantor = (
+        SELECT base.grantor
+        FROM pg_catalog.pg_auth_members AS base
+        WHERE base.roleid = pg_catalog.to_regrole('stockwise_owner')
+          AND base.member = pg_catalog.to_regrole(session_user)
+          AND base.admin_option
+          AND NOT base.inherit_option
+          AND NOT base.set_option
+      )
+      AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option
+  ) THEN
+    RAISE EXCEPTION 'Provisioner/migrator role edges differ from the reviewed PostgreSQL 17 grantor/options setup';
   END IF;
 
   -- pg_has_role checks effective membership, including transitive memberships.
