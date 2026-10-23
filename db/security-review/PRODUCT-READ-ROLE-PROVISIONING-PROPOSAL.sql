@@ -31,7 +31,9 @@
 --   * Membership creation, role changes, deactivation, deletion, and first-
 --     Owner provisioning remain blocked until an approved audit control or
 --     independently verified privileged operational procedure exists. No
---     application membership-write endpoint is in scope.
+--     application membership-write endpoint is in scope. This is an
+--     operational stop condition, not a database-enforced block: the trusted
+--     owner/migrator roles can still change membership rows.
 --   * Before deployment, independently enumerate all exposed Data API schemas,
 --     callable roles, their membership closures, and effective grants. The
 --     Dashboard's exposed-schema setting cannot be verified by this SQL.
@@ -59,7 +61,12 @@
 --
 -- PostgreSQL version is a target prerequisite: membership option syntax below
 -- requires a server supporting explicit SET/INHERIT role-membership options.
--- Supabase server version and managed auth ACL behavior have not been checked.
+-- This proposal requires PostgreSQL 17 and inspects direct pg_auth_members rows
+-- (roleid, member, grantor, admin_option, inherit_option, set_option). Effective
+-- pg_has_role checks are supplementary; they do not replace exact edge checks.
+-- Automatic creator-membership behavior/options remain target-dependent; the
+-- postflight rejects any edge set/options other than those explicitly expected.
+-- Supabase server version and managed Auth ACL behavior have not been checked.
 
 BEGIN;
 SET LOCAL lock_timeout = '5s';
@@ -149,17 +156,33 @@ BEGIN
     RAISE EXCEPTION 'Existing migrator membership must be only SET access to stockwise_owner';
   END IF;
 
-  IF NOT EXISTS (
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.member <> pg_catalog.to_regrole(current_user)
+  ) OR EXISTS (
     SELECT 1
     FROM pg_catalog.pg_auth_members AS m
     WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
       AND m.member = pg_catalog.to_regrole(current_user)
-      AND m.admin_option
-  ) AND NOT EXISTS (
-    SELECT 1 FROM pg_catalog.pg_roles
-    WHERE rolname = current_user AND rolsuper
+      AND (NOT m.admin_option OR m.inherit_option OR NOT m.set_option)
+  ) OR (
+    NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_roles
+      WHERE rolname = current_user AND rolsuper
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_auth_members AS m
+      WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+        AND m.member = pg_catalog.to_regrole(current_user)
+        AND m.admin_option
+        AND NOT m.inherit_option
+        AND m.set_option
+    )
   ) THEN
-    RAISE EXCEPTION 'Provisioner cannot administer migrator membership';
+    RAISE EXCEPTION 'Provisioner must be the sole approved migrator member with ADMIN, SET, and no INHERIT';
   END IF;
 
   IF NOT pg_catalog.has_table_privilege(
@@ -291,41 +314,121 @@ BEGIN
     RAISE EXCEPTION 'Postflight found target-database CREATE on an owner or API role';
   END IF;
 
-  IF NOT pg_catalog.pg_has_role(
-       'stockwise_migrator','stockwise_auth_owner','SET')
-     OR NOT pg_catalog.pg_has_role(
-       'stockwise_migrator','stockwise_product_reader','SET')
-     OR pg_catalog.pg_has_role(
-       'stockwise_migrator','stockwise_auth_owner','USAGE')
-     OR pg_catalog.pg_has_role(
-       'stockwise_migrator','stockwise_product_reader','USAGE') THEN
-    RAISE EXCEPTION 'Migrator role membership is not SET-only';
-  END IF;
+  -- Validate direct catalog edges, not merely transitive pg_has_role results.
+  -- For PostgreSQL 17, pg_auth_members has one row per direct (member, roleid)
+  -- edge and explicit ADMIN/INHERIT/SET options. The expected memberships
+  -- granted to stockwise_migrator are exactly stockwise_owner,
+  -- stockwise_auth_owner, and stockwise_product_reader, all SET-only.
   IF (
     SELECT count(*)
     FROM pg_catalog.pg_auth_members AS m
     WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-      AND m.roleid IN (
-        pg_catalog.to_regrole('stockwise_auth_owner'),
-        pg_catalog.to_regrole('stockwise_product_reader')
-      )
-  ) <> 2 OR EXISTS (
+  ) <> 3 OR EXISTS (
     SELECT 1
     FROM pg_catalog.pg_auth_members AS m
     WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
-      AND m.roleid IN (
+      AND m.roleid NOT IN (
+        pg_catalog.to_regrole('stockwise_owner'),
         pg_catalog.to_regrole('stockwise_auth_owner'),
         pg_catalog.to_regrole('stockwise_product_reader')
       )
+  ) OR EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.member = pg_catalog.to_regrole('stockwise_migrator')
       AND (m.admin_option OR m.inherit_option OR NOT m.set_option)
   ) THEN
-    RAISE EXCEPTION 'Migrator must have exactly the two proposed SET-only role edges';
+    RAISE EXCEPTION 'Migrator must have exactly three direct SET-only memberships and no others';
   END IF;
-  IF NOT pg_catalog.pg_has_role(
-       session_user,'stockwise_auth_owner','SET')
-     OR NOT pg_catalog.pg_has_role(
-       session_user,'stockwise_product_reader','SET') THEN
-    RAISE EXCEPTION 'Provisioning session cannot follow the approved SET path';
+
+  -- Memberships granted TO the two new owner roles must consist only of the
+  -- migrator's SET-only edge and, for a non-superuser creator, PostgreSQL's
+  -- expected ADMIN-only creator edge. Any other member or option combination
+  -- aborts. Superusers need no automatic creator membership.
+  IF (
+    SELECT count(*)
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid IN (
+      pg_catalog.to_regrole('stockwise_auth_owner'),
+      pg_catalog.to_regrole('stockwise_product_reader')
+    )
+  ) <> 2 + CASE
+       WHEN EXISTS (
+         SELECT 1 FROM pg_catalog.pg_roles AS r
+         WHERE r.rolname = session_user AND r.rolsuper
+       ) THEN 0 ELSE 2 END
+     OR EXISTS (
+       SELECT 1
+       FROM pg_catalog.pg_auth_members AS m
+       WHERE m.roleid IN (
+         pg_catalog.to_regrole('stockwise_auth_owner'),
+         pg_catalog.to_regrole('stockwise_product_reader')
+       )
+         AND NOT (
+           (m.member = pg_catalog.to_regrole('stockwise_migrator')
+            AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option)
+           OR
+           (m.member = pg_catalog.to_regrole(session_user)
+            AND EXISTS (
+              SELECT 1 FROM pg_catalog.pg_roles AS r
+              WHERE r.rolname = session_user AND NOT r.rolsuper
+            )
+            AND m.admin_option AND NOT m.inherit_option AND NOT m.set_option)
+         )
+     ) THEN
+    RAISE EXCEPTION 'Unexpected direct membership granted to a function-owner role';
+  END IF;
+
+  -- A protected owner must not itself be a member of another role or grant
+  -- role membership to anyone. Check both pg_auth_members directions and the
+  -- grantor field; pg_has_role alone cannot prove these direct-edge invariants.
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.member IN (
+      pg_catalog.to_regrole('stockwise_auth_owner'),
+      pg_catalog.to_regrole('stockwise_product_reader')
+    )
+  ) OR EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.grantor IN (
+      pg_catalog.to_regrole('stockwise_auth_owner'),
+      pg_catalog.to_regrole('stockwise_product_reader')
+    )
+  ) THEN
+    RAISE EXCEPTION 'A function-owner role has an outgoing membership or is a membership grantor';
+  END IF;
+
+  -- Only the approved operator may be a direct member of the migrator role.
+  -- A non-superuser operator must have exact ADMIN+SET, non-INHERIT options;
+  -- a superuser may have no membership edge because superusers can assume it.
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.member <> pg_catalog.to_regrole(session_user)
+  ) OR EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+      AND m.member = pg_catalog.to_regrole(session_user)
+      AND (NOT m.admin_option OR m.inherit_option OR NOT m.set_option)
+  ) OR (
+    NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_roles AS r
+      WHERE r.rolname = session_user AND r.rolsuper
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_auth_members AS m
+      WHERE m.roleid = pg_catalog.to_regrole('stockwise_migrator')
+        AND m.member = pg_catalog.to_regrole(session_user)
+        AND m.admin_option AND NOT m.inherit_option AND m.set_option
+    )
+  ) OR NOT pg_catalog.pg_has_role(
+       session_user,'stockwise_migrator','SET') THEN
+    RAISE EXCEPTION 'Migrator membership is not limited to the approved operator path';
   END IF;
 
   IF NOT pg_catalog.has_schema_privilege(
