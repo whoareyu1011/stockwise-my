@@ -212,6 +212,7 @@ tbody tr:last-child td{border-bottom:0}
   <button class="nav" data-page="inventory"><span class="ico">▤</span> Inventory</button>
   <button class="nav" data-page="record" data-demo-only><span class="ico">＋</span> Record movement</button>
   <button class="nav" data-page="history" data-demo-only><span class="ico">◷</span> Transaction history</button>
+  <button class="nav" data-page="movement-history" data-demo-only><span class="ico">↕</span> Stock movement history</button>
   <button class="nav" data-page="invoice" data-demo-only><span class="ico">▧</span> E-Invoice</button>
   <div class="sidebar-bottom">
     <strong>Privacy first</strong><br>
@@ -316,6 +317,29 @@ tbody tr:last-child td{border-bottom:0}
     <div class="table-wrap"><table><thead><tr><th>Date / reference</th><th>Party</th><th>Type</th><th>Items</th><th>Amount</th><th>Payment</th><th>Details</th></tr></thead><tbody id="historyBody"></tbody></table></div>
   </div>
   <div class="card" id="historyDetail" style="margin-top:18px;display:none"></div>
+</section>
+
+<section class="page" id="page-movement-history" data-demo-only>
+  <div class="page-intro"><div><h2>Stock movement history</h2><p>Opening balances and recorded stock-in / stock-out changes from this browser's demo ledger.</p></div></div>
+  <div class="card">
+    <div class="toolbar">
+      <select class="search" id="movementProductFilter" aria-label="Filter stock movements by product" onchange="renderStockMovementHistory()">
+        <option value="">All products</option>
+      </select>
+      <select class="search" id="movementTypeFilter" aria-label="Filter stock movements by type" onchange="renderStockMovementHistory()">
+        <option value="">All movement types</option>
+        <option value="opening">Opening stock</option>
+        <option value="in">Stock in</option>
+        <option value="out">Stock out</option>
+      </select>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Product / stock code</th><th>Movement</th><th>Quantity</th><th>Timestamp</th><th>Balance after</th></tr></thead>
+        <tbody id="stockMovementHistoryBody"></tbody>
+      </table>
+    </div>
+  </div>
 </section>
 
 <section class="page" id="page-invoice" data-demo-only>
@@ -438,6 +462,7 @@ function openingSnapshot(product){
     type:"opening",
     quantityDelta:stock,
     date:today(),
+    createdAt:new Date().toISOString(),
     reference:"Opening balance",
     source:"legacy_snapshot"
   };
@@ -471,10 +496,20 @@ function normalizeDemoData(data){
 function loadData(){
   try{
     const raw=localStorage.getItem(STORAGE_KEY);
-    if(!raw)return normalizeDemoData(initialData());
+    if(!raw){
+      const seeded=normalizeDemoData(initialData());
+      try{localStorage.setItem(STORAGE_KEY,JSON.stringify(seeded))}catch(e){}
+      return seeded;
+    }
     const d=JSON.parse(raw);
     if(!Array.isArray(d.products)||!Array.isArray(d.transactions)||!Array.isArray(d.invoices))return normalizeDemoData(initialData());
-    return normalizeDemoData(d);
+    const needsLedger=!Array.isArray(d.stockMovements);
+    const normalized=normalizeDemoData(d);
+    if(needsLedger){
+      // Add the opening snapshot without replaying or removing existing history.
+      try{localStorage.setItem(STORAGE_KEY,JSON.stringify(normalized))}catch(e){}
+    }
+    return normalized;
   }catch(e){return normalizeDemoData(initialData())}
 }
 let db=isDemoMode?loadData():{products:[],transactions:[],invoices:[],settings:{businessName:""}};
@@ -558,10 +593,11 @@ function navigate(page){
   document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));
   document.getElementById("page-"+page).classList.add("active");
   document.querySelectorAll(".nav").forEach(n=>n.classList.toggle("active",n.dataset.page===page));
-  const names={overview:"Overview",inventory:"Inventory",record:"Record movement",history:"Transaction history",invoice:"E-Invoice"};
+  const names={overview:"Overview",inventory:"Inventory",record:"Record movement",history:"Transaction history","movement-history":"Stock movement history",invoice:"E-Invoice"};
   document.getElementById("pageTitle").textContent=names[page]||"StockWise MY";
   if(page==="inventory")renderInventory();
   if(page==="history")renderHistory();
+  if(page==="movement-history")renderStockMovementHistory();
   if(page==="invoice"){refreshInvoiceTransactions();updateCorrectionField();renderInvoiceLineEditor();renderInvoiceHistory()}
   window.scrollTo({top:0,behavior:"smooth"});
 }
@@ -583,7 +619,7 @@ function grossProfit(tx){
 }
 function unitsInStock(){return db.products.reduce((s,p)=>s+Number(p.stock||0),0)}
 function renderAll(){
-  renderOverview();renderInventory();renderHistory();refreshInvoiceTransactions();renderInvoiceHistory();
+  renderOverview();renderInventory();renderHistory();renderStockMovementHistory();refreshInvoiceTransactions();renderInvoiceHistory();
 }
 function renderOverview(){
   const sales=db.transactions.filter(t=>t.type==="sale").reduce((s,t)=>s+t.total,0);
@@ -706,7 +742,7 @@ function saveProduct(){
     if(stock>0){
       db.stockMovements.push({
         id:uid("SM"),productId:product.id,type:"opening",quantityDelta:stock,
-        date:today(),reference:"Opening stock",source:"new_product"
+        date:today(),createdAt:new Date().toISOString(),reference:"Opening stock",source:"new_product"
       });
     }
     if(!persist()){
@@ -911,7 +947,7 @@ function confirmRecord(){
     p.stock+=quantityDelta;
     db.stockMovements.push({
       id:uid("SM"),productId:p.id,type:tx.type,quantityDelta,
-      date:tx.date,reference:tx.ref,transactionId:tx.id,source:"transaction"
+      date:tx.date,createdAt:tx.createdAt,reference:tx.ref,transactionId:tx.id,source:"transaction"
     });
   }
   db.transactions.push(tx);
@@ -937,6 +973,65 @@ function renderHistory(){
     <td><span class="pill ${t.type==="sale"?"blue":t.type==="purchase"?"green":"amber"}">${esc(typeLabel(t.type))}</span></td>
     <td>${t.lines.reduce((s,l)=>s+l.qty,0)} units / ${t.lines.length} products</td><td class="strong">${money(t.total)}</td>
     <td>${esc(t.paymentStatus||"Unspecified")}</td><td><button class="btn small" onclick="showHistoryDetail('${t.id}')">View</button></td></tr>`).join(""):`<tr><td colspan="7"><div class="empty">No matching transactions.</div></td></tr>`;
+}
+function movementTimestamp(movement){
+  const exact=typeof movement.createdAt==="string"?Date.parse(movement.createdAt):NaN;
+  if(Number.isFinite(exact)){
+    return new Date(exact).toLocaleString("en-MY",{dateStyle:"medium",timeStyle:"short"});
+  }
+  const date=typeof movement.date==="string"?movement.date:"";
+  const dateOnly=/^\d{4}-\d{2}-\d{2}$/.test(date);
+  return dateOnly?`${date} · time not recorded`:"Time not recorded";
+}
+function getStockMovementHistoryRows(){
+  const balances=new Map(),rows=[];
+  (Array.isArray(db.stockMovements)?db.stockMovements:[]).forEach((movement,index)=>{
+    if(!movement||!Number.isSafeInteger(movement.quantityDelta)||movement.quantityDelta===0)return;
+    const product=getProduct(String(movement.productId));
+    if(!product)return;
+    const key=String(product.id),balance=(balances.get(key)||0)+movement.quantityDelta;
+    if(!Number.isSafeInteger(balance))return;
+    balances.set(key,balance);
+    const opening=movement.type==="opening"||movement.source==="legacy_snapshot"||movement.source==="new_product";
+    rows.push({
+      movement,product,index,balance,
+      kind:opening?"opening":movement.quantityDelta>0?"in":"out",
+      timestamp:movementTimestamp(movement)
+    });
+  });
+  // The ledger is append-only in this demo; array order is the reliable
+  // creation order for older rows whose exact timestamp was not recorded.
+  return rows.sort((a,b)=>b.index-a.index);
+}
+function renderStockMovementHistory(){
+  const productFilter=document.getElementById("movementProductFilter");
+  const typeFilter=document.getElementById("movementTypeFilter");
+  const body=document.getElementById("stockMovementHistoryBody");
+  if(!productFilter||!typeFilter||!body)return;
+  const rows=getStockMovementHistoryRows();
+  const selectedProduct=productFilter.value;
+  const products=[...new Map(rows.map(row=>[String(row.product.id),row.product])).values()]
+    .sort((a,b)=>a.name.localeCompare(b.name)||a.sku.localeCompare(b.sku));
+  productFilter.innerHTML='<option value="">All products</option>'+products.map(product=>
+    `<option value="${esc(product.id)}">${esc(product.name)} · ${esc(product.sku)}</option>`
+  ).join("");
+  productFilter.value=products.some(product=>String(product.id)===selectedProduct)?selectedProduct:"";
+  const productId=productFilter.value,kind=typeFilter.value;
+  const filtered=rows.filter(row=>
+    (!productId||String(row.product.id)===productId)&&(!kind||row.kind===kind)
+  );
+  body.innerHTML=filtered.length?filtered.map(row=>{
+    const delta=row.movement.quantityDelta;
+    const quantityLabel=`${delta>0?"+":"−"}${Math.abs(delta).toLocaleString("en-MY")} units`;
+    const typeLabelText=row.kind==="opening"?"Opening stock":row.kind==="in"?"Stock in":"Stock out";
+    return `<tr>
+      <td><div class="strong">${esc(row.product.name)}</div><div class="muted">${esc(row.product.sku)}</div></td>
+      <td><span class="pill ${row.kind==="out"?"amber":"green"}">${typeLabelText}</span></td>
+      <td>${quantityLabel}</td>
+      <td>${esc(row.timestamp)}</td>
+      <td><strong>${row.balance.toLocaleString("en-MY")} units</strong></td>
+    </tr>`;
+  }).join(""):`<tr><td colspan="5"><div class="empty">No stock movements match these filters.</div></td></tr>`;
 }
 function showHistoryDetail(id){
   const t=db.transactions.find(x=>x.id===id);if(!t)return;activeHistoryId=id;
