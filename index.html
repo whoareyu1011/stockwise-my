@@ -238,9 +238,9 @@ tbody tr:last-child td{border-bottom:0}
 
 <section class="page active" id="page-overview" data-demo-only>
   <div class="grid metrics">
-    <div class="card"><span class="metric-icon">↗️</span><div class="metric-label">Sales recorded</div><div class="metric-value" id="mSales">RM 0.00</div><div class="metric-foot">Customer orders recorded</div></div>
-    <div class="card"><span class="metric-icon">↙️</span><div class="metric-label">Purchase costs</div><div class="metric-value" id="mCosts">RM 0.00</div><div class="metric-foot">Supplier purchases recorded</div></div>
-    <div class="card"><span class="metric-icon">◈</span><div class="metric-label">Gross profit estimate</div><div class="metric-value" id="mProfit">RM 0.00</div><div class="metric-foot">Sales less cost of goods sold</div></div>
+    <div class="card"><span class="metric-icon">↗️</span><div class="metric-label">Net sales</div><div class="metric-value" id="mSales">RM 0.00</div><div class="metric-foot" id="mSalesFoot">Sales after discounts</div></div>
+    <div class="card"><span class="metric-icon">↙️</span><div class="metric-label">Cost of goods sold</div><div class="metric-value" id="mCogs">RM 0.00</div><div class="metric-foot" id="mCogsFoot">From cost recorded on each sale</div></div>
+    <div class="card"><span class="metric-icon">◈</span><div class="metric-label">Gross profit</div><div class="metric-value" id="mProfit">RM 0.00</div><div class="metric-foot" id="mProfitFoot">Net sales minus COGS</div></div>
     <div class="card"><span class="metric-icon">▤</span><div class="metric-label">Products in catalogue</div><div class="metric-value" id="mProducts">0</div><div class="metric-foot" id="mUnits">0 units in stock</div></div>
   </div>
   <div class="grid section-grid">
@@ -631,21 +631,97 @@ function typeLabel(type){
   return ({sale:"Customer order",purchase:"Supplier purchase",adjustment_in:"Stock increase",adjustment_out:"Stock decrease"})[type]||type;
 }
 function amountFor(tx){return tx.total||0}
+function recordedSaleCost(line){
+  const stored=line.costAtSale!==undefined&&line.costAtSale!==null?line.costAtSale:line.cost;
+  if(stored===undefined||stored===null||stored==="")return null;
+  const cost=Number(stored);
+  return isCurrencyAmount(cost)&&cost>=0?cost:null;
+}
+function formatRecordedSaleCost(line){
+  const cost=recordedSaleCost(line);
+  return cost===null?"Not recorded":money(cost);
+}
+function calculateSaleRecordMetrics(tx){
+  const lines=Array.isArray(tx.lines)?tx.lines:[];
+  let subtotal=0,discountTotal=0,cogs=0,revenueIssues=0,missingCostLines=0;
+  if(!lines.length)revenueIssues++;
+  for(const line of lines){
+    const qty=Number(line.qty),price=Number(line.price),discount=Number(line.discount??0);
+    const validQty=Number.isSafeInteger(qty)&&qty>0;
+    if(!validQty||!isCurrencyAmount(price)||price<0||!isCurrencyAmount(discount)||discount<0){
+      revenueIssues++;
+    }else{
+      const lineSubtotal=roundMoney(qty*price);
+      if(!isCurrencyAmount(lineSubtotal)||discount>lineSubtotal)revenueIssues++;
+      else{
+        subtotal=roundMoney(subtotal+lineSubtotal);
+        discountTotal=roundMoney(discountTotal+discount);
+      }
+    }
+
+    // Use only the cost snapshot stored on the sale line. Never substitute
+    // the product's current cost for missing historical cost.
+    const cost=recordedSaleCost(line);
+    const lineCogs=validQty&&cost!==null?roundMoney(qty*cost):NaN;
+    if(!isCurrencyAmount(lineCogs))missingCostLines++;
+    else cogs=roundMoney(cogs+lineCogs);
+  }
+  let netSales=roundMoney(subtotal-discountTotal);
+  if(!isCurrencyAmount(netSales))revenueIssues++;
+  for(const [field,expected] of [["subtotal",subtotal],["discount",discountTotal],["total",netSales]]){
+    if(tx[field]===undefined||tx[field]===null)continue;
+    const saved=Number(tx[field]);
+    if(!isCurrencyAmount(saved)||roundMoney(saved)!==expected)revenueIssues++;
+  }
+  if(!isCurrencyAmount(cogs))missingCostLines++;
+  return {
+    netSales,cogs,
+    revenueComplete:revenueIssues===0,
+    cogsComplete:missingCostLines===0,
+    revenueIssues,missingCostLines
+  };
+}
+function calculateSalesMetrics(transactions){
+  const sales=transactions.filter(tx=>tx.type==="sale");
+  let netSales=0,cogs=0,revenueComplete=true,cogsComplete=true,revenueIssues=0,missingCostLines=0;
+  sales.forEach(tx=>{
+    const result=calculateSaleRecordMetrics(tx);
+    if(result.revenueComplete)netSales=roundMoney(netSales+result.netSales);
+    else{revenueComplete=false;revenueIssues+=result.revenueIssues}
+    if(result.cogsComplete)cogs=roundMoney(cogs+result.cogs);
+    else{cogsComplete=false;missingCostLines+=result.missingCostLines}
+  });
+  if(!isCurrencyAmount(netSales)){revenueComplete=false;revenueIssues++}
+  if(!isCurrencyAmount(cogs)){cogsComplete=false;missingCostLines++}
+  return {
+    salesCount:sales.length,netSales,cogs,revenueComplete,cogsComplete,
+    revenueIssues,missingCostLines,
+    grossProfit:revenueComplete&&cogsComplete?roundMoney(netSales-cogs):null
+  };
+}
 function grossProfit(tx){
   if(tx.type!=="sale")return null;
-  return tx.lines.reduce((s,l)=>s+(Number(l.price)-Number(l.cost))*Number(l.qty),0)-Number(tx.discount||0);
+  const result=calculateSaleRecordMetrics(tx);
+  return result.revenueComplete&&result.cogsComplete?roundMoney(result.netSales-result.cogs):null;
 }
 function unitsInStock(){return db.products.reduce((s,p)=>s+Number(p.stock||0),0)}
 function renderAll(){
   renderOverview();renderInventory();renderSalesRecords();renderPurchaseRecords();renderHistory();renderStockMovementHistory();refreshInvoiceTransactions();renderInvoiceHistory();
 }
 function renderOverview(){
-  const sales=db.transactions.filter(t=>t.type==="sale").reduce((s,t)=>s+Number(t.total||0),0);
-  const costs=db.transactions.filter(t=>t.type==="purchase").reduce((s,t)=>s+Number(t.total||0),0);
-  const profit=db.transactions.reduce((s,t)=>s+(grossProfit(t)||0),0);
-  document.getElementById("mSales").textContent=money(sales);
-  document.getElementById("mCosts").textContent=money(costs);
-  document.getElementById("mProfit").textContent=money(profit);
+  const metrics=calculateSalesMetrics(db.transactions);
+  document.getElementById("mSales").textContent=metrics.revenueComplete?money(metrics.netSales):"Incomplete";
+  document.getElementById("mCogs").textContent=metrics.cogsComplete?money(metrics.cogs):"Incomplete";
+  document.getElementById("mProfit").textContent=metrics.grossProfit===null?"Unavailable":money(metrics.grossProfit);
+  document.getElementById("mSalesFoot").textContent=metrics.revenueComplete
+    ?`${metrics.salesCount} sale record${metrics.salesCount===1?"":"s"} · after discounts`
+    :`${metrics.revenueIssues} sales amount issue${metrics.revenueIssues===1?"":"s"}; total unavailable`;
+  document.getElementById("mCogsFoot").textContent=metrics.cogsComplete
+    ?"From sale-time cost snapshots; purchases are not used as COGS"
+    :`${metrics.missingCostLines} sale line${metrics.missingCostLines===1?"":"s"} missing valid historical cost; current cost not substituted`;
+  document.getElementById("mProfitFoot").textContent=metrics.grossProfit===null
+    ?"Unavailable until sales amounts and sale-time costs are complete"
+    :"Net sales minus COGS; before operating expenses and tax";
   document.getElementById("mProducts").textContent=db.products.length;
   document.getElementById("mUnits").textContent=unitsInStock()+" units in stock";
   const latest=db.transactions.filter(t=>t.type==="sale"||t.type==="purchase")
@@ -655,7 +731,7 @@ function renderOverview(){
     <td><span class="pill ${t.type==="sale"?"blue":"green"}">${t.type==="sale"?"Sale":"Purchase"}</span></td>
     <td>${t.lines.reduce((s,l)=>s+l.qty,0)} units<br><span class="muted">${t.lines.length} product(s)</span></td>
     <td class="strong">${money(t.total)}<br><span class="muted">Disc. ${money(t.discount)}</span></td>
-    <td class="strong" style="color:var(--green)">${t.type==="sale"?money(grossProfit(t)):"—"}</td></tr>`).join(""):`<tr><td colspan="5"><div class="empty">No sales or purchase records yet.</div></td></tr>`;
+    <td class="strong" style="${t.type==="sale"&&grossProfit(t)!==null?"color:var(--green)":""}">${t.type==="sale"?(grossProfit(t)===null?"Unavailable":money(grossProfit(t))):"—"}</td></tr>`).join(""):`<tr><td colspan="5"><div class="empty">No sales or purchase records yet.</div></td></tr>`;
   const alerts=db.products.filter(p=>p.stock<=p.threshold).sort((a,b)=>a.stock-b.stock).slice(0,6);
   document.getElementById("stockAlerts").innerHTML=alerts.length?alerts.map(p=>`<div>
     <div class="stock-row"><div><div class="stock-name">${esc(p.name)}</div><div class="stock-sub">${esc(p.sku)} · ${esc(p.category)}</div></div>
@@ -921,7 +997,9 @@ function collectLines(){
     return product?{
       productId:product.id,sku:product.sku,name:product.name,category:product.category,
       qty:Number(row.querySelector(".line-qty").value),price:Number(row.querySelector(".line-price").value),
-      discount:Number(row.querySelector(".line-discount").value),cost:Number(product.cost)
+      priceEntered:row.querySelector(".line-price").value.trim()!=="",
+      discount:Number(row.querySelector(".line-discount").value),
+      cost:Number(product.cost),costAtSale:Number(product.cost)
     }:null;
   }).filter(Boolean);
 }
@@ -948,6 +1026,7 @@ function validateLines(lines,type){
   const quantities=new Map();
   for(const l of lines){
     if(!Number.isSafeInteger(l.qty)||l.qty<=0)return "Each quantity must be a positive whole number.";
+    if((type==="sale"||type==="purchase")&&l.priceEntered===false)return "Enter a unit selling price or unit cost for every item.";
     if(!Number.isFinite(l.price)||l.price<0||!Number.isFinite(l.discount)||l.discount<0)return "Check each item price and discount.";
     if(!isCurrencyAmount(l.price)||!isCurrencyAmount(l.discount))return "Prices and discounts must use no more than two decimal places.";
     const lineSubtotal=roundMoney(l.qty*l.price);
@@ -975,7 +1054,7 @@ function validateLines(lines,type){
 function reviewRecord(){
   if(!requireDemoMode("Recording stock movements"))return;
   const type=document.getElementById("rType").value,party=document.getElementById("rParty").value.trim(),date=document.getElementById("rDate").value;
-  const lines=collectLines(),err=validateLines(lines,type);
+  const enteredLines=collectLines(),err=validateLines(enteredLines,type);
   if(!party||!date){
     toast(type==="adjustment_in"||type==="adjustment_out"
       ?"Enter an adjustment reason and transaction date."
@@ -983,6 +1062,7 @@ function reviewRecord(){
     return;
   }
   if(err){toast(err);return}
+  const lines=enteredLines.map(({priceEntered,...line})=>line);
   const {subtotal,discount,total}=calculateRecordAmounts(lines);
   recordDraft={id:uid("TX"),type,party,date,ref:document.getElementById("rRef").value.trim()||uid("REF"),notes:document.getElementById("rNotes").value.trim(),lines,subtotal,discount,total,attachment:selectedAttachment,paymentStatus:"Unspecified"};
   const unitLabel=type==="purchase"?"Unit cost":type==="sale"?"Unit selling price":"Unit value";
@@ -990,7 +1070,7 @@ function reviewRecord(){
     <div class="review-item"><span>Movement</span><strong>${esc(typeLabel(type))}</strong></div>
     <div class="review-item"><span>Party</span><strong>${esc(party)}</strong></div>
     <div class="review-item"><span>Date / reference</span><strong>${esc(date)} / ${esc(recordDraft.ref)}</strong></div>
-    <div class="table-wrap"><table><thead><tr><th>SKU / product</th><th>Qty</th><th>${unitLabel}</th><th>Discount</th><th>Line total</th></tr></thead><tbody>${lines.map(l=>`<tr><td>${esc(l.sku)} · ${esc(l.name)}${type==="sale"?`<br><span class="muted">Unit cost: ${money(l.cost)}</span>`:""}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.discount)}</td><td>${money(roundMoney(l.qty*l.price-l.discount))}</td></tr>`).join("")}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>SKU / product</th><th>Qty</th><th>${unitLabel}</th><th>Discount</th><th>Line total</th></tr></thead><tbody>${lines.map(l=>`<tr><td>${esc(l.sku)} · ${esc(l.name)}${type==="sale"?`<br><span class="muted">Unit cost at sale: ${formatRecordedSaleCost(l)}</span>`:""}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.discount)}</td><td>${money(roundMoney(l.qty*l.price-l.discount))}</td></tr>`).join("")}</tbody></table></div>
     <div class="totals"><div class="total-row"><span>Subtotal</span><strong>${money(subtotal)}</strong></div><div class="total-row"><span>Discount</span><strong>${money(discount)}</strong></div><div class="total-row final"><span>Total</span><strong>${money(recordDraft.total)}</strong></div></div>
     <div class="review-item"><span>Attachment</span><strong>${recordDraft.attachment?"Image attached":"No attachment"}</strong></div>
     <div class="review-item"><span>Notes</span><span>${esc(recordDraft.notes||"—")}</span></div>`;
@@ -1106,12 +1186,14 @@ function showHistoryDetail(id){
   const t=db.transactions.find(x=>x.id===id);if(!t)return;activeHistoryId=id;
   const box=document.getElementById("historyDetail");box.style.display="block";
   const unitLabel=t.type==="purchase"?"Unit cost":t.type==="sale"?"Unit selling price":"Unit value";
+  const saleProfit=t.type==="sale"?grossProfit(t):null;
   box.innerHTML=`<div class="card-head"><div><h3>Transaction details</h3><p>${esc(t.ref)} · ${esc(t.date)}</p></div><button class="btn small" onclick="document.getElementById('historyDetail').style.display='none'">Close</button></div>
     <div class="review-item"><span>Party</span><strong>${esc(t.party)}</strong></div>
     <div class="review-item"><span>Movement</span><strong>${esc(typeLabel(t.type))}</strong></div>
-    <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Product</th><th>Qty</th><th>${unitLabel}</th>${t.type==="sale"?'<th>Unit cost</th>':""}<th>Discount</th><th>Line total</th></tr></thead><tbody>${t.lines.map(l=>`<tr><td>${esc(l.sku)}</td><td>${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td>${t.type==="sale"?`<td>${money(l.cost)}</td>`:""}<td>${money(l.discount)}</td><td>${money(roundMoney(l.qty*l.price-l.discount))}</td></tr>`).join("")}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Product</th><th>Qty</th><th>${unitLabel}</th>${t.type==="sale"?'<th>Unit cost at sale</th>':""}<th>Discount</th><th>Line total</th></tr></thead><tbody>${t.lines.map(l=>`<tr><td>${esc(l.sku)}</td><td>${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td>${t.type==="sale"?`<td>${formatRecordedSaleCost(l)}</td>`:""}<td>${money(l.discount)}</td><td>${money(roundMoney(l.qty*l.price-l.discount))}</td></tr>`).join("")}</tbody></table></div>
     <div class="totals"><div class="total-row"><span>Subtotal</span><strong>${money(t.subtotal)}</strong></div><div class="total-row"><span>Discount</span><strong>${money(t.discount)}</strong></div><div class="total-row final"><span>Total</span><strong>${money(t.total)}</strong></div></div>
-    <div class="review-item"><span>Gross profit estimate</span><strong>${t.type==="sale"?money(grossProfit(t)):"Not applicable"}</strong></div>
+    <div class="review-item"><span>Gross profit</span><strong>${t.type==="sale"?(saleProfit===null?"Unavailable":money(saleProfit)):"Not applicable"}</strong></div>
+    ${t.type==="sale"&&saleProfit===null?'<div class="help">Historical sales amount or sale-time cost data is incomplete. Current product cost was not substituted.</div>':""}
     <div class="review-item"><span>Payment status</span><strong>${esc(t.paymentStatus||"Unspecified")}</strong></div>
     <div class="review-item"><span>Notes</span><span>${esc(t.notes||"—")}</span></div>
     <div class="form-actions"><button class="btn primary" onclick="navigate('invoice');document.getElementById('invTransaction').value='${t.id}';loadInvoiceTransaction()">Prepare e-Invoice draft</button></div>`;
