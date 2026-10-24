@@ -19,7 +19,7 @@
 
 | Resource          | Link                                           |
 | ----------------- | ---------------------------------------------- |
-| GitHub Repository | https://github.com/your-username/stockwise-my  |
+| GitHub Repository | https://github.com/whoareyu1011/stockwise-my |
 | Live Demo         | https://stockwise-my.replit.app                |
 | Slide Deck        | https://example.com/slides                     |
 | Demo Video        | https://example.com/demo-video                 |
