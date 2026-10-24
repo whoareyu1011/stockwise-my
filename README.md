@@ -162,7 +162,7 @@ python3 run-phase2-isolated.py
 * **Hosting:** The production web service is deployed directly via Replit Deployments.
 * **Secrets Management:** Securely stored sensitive database connection strings (`DATABASE_URL`) and signing keys (`JWT_SECRET`) using Replit Secrets.
 
-📄 Proof of use: [`submission/SDC2026_Prompt Masters_Replit_POU.pdf`](https://www.google.com/search?q=submission/SDC2026_TeamName_Replit_POU.pdf)
+📄 Proof of use: [`submission/SDC2026_Prompt Masters_Replit_POU.pdf`](https://github.com/whoareyu1011/stockwise-my/blob/728d4a588eb184d7437bde34db7c5b9cdaba9b32/Submission/SDC2026_Prompt%20Masters_Replit_POU.pdf)
 
 ---
 
