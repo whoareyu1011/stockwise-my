@@ -21,7 +21,7 @@
 | ----------------- | ---------------------------------------------- |
 | GitHub Repository | https://github.com/whoareyu1011/stockwise-my |
 | Live Demo         | https://stockwise-my.replit.app                |
-| Slide Deck        | https://example.com/slides                     |
+| Slide Deck        | file:///C:/Users/tanbk/Downloads/Entre%20Master%20Slide.pdf|
 | Demo Video        | https://example.com/demo-video                 |
 
 ---
