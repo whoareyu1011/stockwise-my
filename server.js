@@ -1,10 +1,36 @@
 const express = require("express");
 const path = require("node:path");
+const { readSupabasePublicConfig } = require("./server/security/public-auth-config.cjs");
 
 const indexPath = path.join(__dirname, "index.html");
+const supabaseBrowserBundle = path.join(
+  __dirname,
+  "node_modules/@supabase/supabase-js/dist/umd/supabase.js",
+);
 
-function createApp() {
+function createApp({ env = process.env } = {}) {
   const app = express();
+
+  // Only public Supabase project settings are returned. Secret/service-role
+  // keys are rejected by the config reader and are never read by browser code.
+  app.get("/api/auth/config", (_request, response) => {
+    response.set("Cache-Control", "no-store");
+    const config = readSupabasePublicConfig(env);
+    if (!config) return response.json({ configured: false });
+    return response.json({
+      configured: true,
+      projectUrl: config.projectUrl,
+      publishableKey: config.publishableKey,
+    });
+  });
+
+  // Serve the locally installed official Supabase browser client; no CDN
+  // request is made by the page.
+  app.get("/assets/supabase.js", (_request, response, next) => {
+    response.sendFile(supabaseBrowserBundle, error => {
+      if (error) next(error);
+    });
+  });
 
   app.get("/api/health/live", (_request, response) => {
     response.set("Cache-Control", "no-store");

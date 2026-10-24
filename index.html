@@ -67,6 +67,7 @@ button{cursor:pointer}
 .topbar h1{font-size:25px;letter-spacing:-.6px;margin:0 0 6px}
 .subtitle{font-size:12px;color:var(--muted)}
 .top-actions{display:flex;gap:9px;align-items:center}
+.auth-status{font-size:10px;color:var(--muted);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .avatar{width:35px;height:35px;background:#e3e9ff;color:var(--primary);
   display:grid;place-items:center;border-radius:50%;font-weight:800;font-size:12px}
 .btn{border:1px solid var(--border);background:white;color:var(--text);
@@ -232,6 +233,9 @@ tbody tr:last-child td{border-bottom:0}
   <div class="top-actions">
     <button class="btn mobile-menu" onclick="toggleMobileNav()">☰ Menu</button>
     <button class="btn primary" onclick="openRecord()" data-demo-only>＋ New record</button>
+    <span class="auth-status" id="authStatus" role="status" aria-live="polite">Checking sign-in…</span>
+    <button class="btn small" id="authSignInButton" type="button" onclick="openAuthModal()" disabled>Sign in</button>
+    <button class="btn small" id="authSignOutButton" type="button" onclick="signOutUser()" hidden>Sign out</button>
     <div class="avatar">SME</div>
   </div>
 </header>
@@ -436,6 +440,31 @@ tbody tr:last-child td{border-bottom:0}
   <div class="form-actions"><button class="btn" onclick="closeModal('productModal')">Cancel</button><button class="btn primary" onclick="saveProduct()">Save product</button></div>
 </div>
 </div>
+<div class="modal-backdrop" id="authModal" role="presentation">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
+    <div class="modal-head">
+      <h3 id="authModalTitle">Sign in</h3>
+      <button class="btn small" type="button" onclick="closeModal('authModal')" aria-label="Close sign-in dialog">✕</button>
+    </div>
+    <div class="notice" id="authModalMessage" role="status" aria-live="polite">Use your Supabase Auth email and password.</div>
+    <form onsubmit="submitAuth(event)">
+      <div class="form-grid">
+        <div class="field full">
+          <label for="authEmail">Email</label>
+          <input id="authEmail" type="email" autocomplete="email" required>
+        </div>
+        <div class="field full">
+          <label for="authPassword">Password</label>
+          <input id="authPassword" type="password" autocomplete="current-password" required>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn" id="authModeButton" type="button" onclick="toggleAuthMode()">Create account</button>
+        <button class="btn primary" id="authSubmitButton" type="submit">Sign in</button>
+      </div>
+    </form>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -462,6 +491,9 @@ let selectedAttachmentMeta = null;
 let attachmentReadPending = false;
 let currentInvoice = null;
 let activeHistoryId = null;
+let supabaseAuthClient = null;
+let authMode = "signin";
+let authLibraryPromise = null;
 
 function initialData(){
   const products=[
@@ -598,6 +630,116 @@ async function initializeApplication(){
   }
   renderLines();
   renderAll();
+}
+function setAuthStatus(message, enabled=false){
+  document.getElementById("authStatus").textContent=message;
+  document.getElementById("authSignInButton").disabled=!enabled;
+}
+function renderAuthSession(session){
+  const email=session?.user?.email;
+  document.getElementById("authSignOutButton").hidden=!session;
+  document.getElementById("authSignInButton").hidden=Boolean(session);
+  setAuthStatus(session?`Signed in: ${email||"account"}`:"Not signed in",true);
+}
+function loadSupabaseBrowserClient(){
+  if(window.supabase?.createClient)return Promise.resolve(window.supabase);
+  if(authLibraryPromise)return authLibraryPromise;
+  authLibraryPromise=new Promise((resolve,reject)=>{
+    const script=document.createElement("script");
+    script.src="/assets/supabase.js";
+    script.async=true;
+    script.onload=()=>window.supabase?.createClient
+      ?resolve(window.supabase):reject(new Error("Supabase client unavailable."));
+    script.onerror=()=>reject(new Error("Supabase client unavailable."));
+    document.head.appendChild(script);
+  });
+  return authLibraryPromise;
+}
+async function initializeSupabaseAuth(){
+  try{
+    const response=await fetch("/api/auth/config",{headers:{Accept:"application/json"},cache:"no-store"});
+    const config=await response.json().catch(()=>null);
+    if(!response.ok||config?.configured!==true){
+      setAuthStatus("Sign-in not configured · demo available");
+      return;
+    }
+    const sdk=await loadSupabaseBrowserClient();
+    supabaseAuthClient=sdk.createClient(config.projectUrl,config.publishableKey,{
+      auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}
+    });
+    window.stockwiseAuth=Object.freeze({
+      getAccessToken:async()=>{
+        const {data,error}=await supabaseAuthClient.auth.getSession();
+        return error?null:(data.session?.access_token||null);
+      },
+      signOut:()=>supabaseAuthClient.auth.signOut()
+    });
+    supabaseAuthClient.auth.onAuthStateChange((_event,session)=>renderAuthSession(session));
+    const {data,error}=await supabaseAuthClient.auth.getSession();
+    if(error)throw error;
+    renderAuthSession(data.session);
+  }catch{
+    window.stockwiseAuth=undefined;
+    setAuthStatus("Sign-in unavailable · demo available");
+  }
+}
+function openAuthModal(){
+  if(!supabaseAuthClient){toast("Supabase Auth is not configured.");return}
+  authMode="signin";
+  updateAuthForm();
+  document.getElementById("authModalMessage").textContent="Use your Supabase Auth email and password.";
+  document.getElementById("authModal").classList.add("open");
+  document.getElementById("authEmail").focus();
+}
+function toggleAuthMode(){
+  authMode=authMode==="signin"?"signup":"signin";
+  updateAuthForm();
+}
+function updateAuthForm(){
+  const signingUp=authMode==="signup";
+  document.getElementById("authModalTitle").textContent=signingUp?"Create account":"Sign in";
+  document.getElementById("authSubmitButton").textContent=signingUp?"Create account":"Sign in";
+  document.getElementById("authModeButton").textContent=signingUp?"Back to sign in":"Create account";
+  document.getElementById("authPassword").autocomplete=signingUp?"new-password":"current-password";
+}
+async function submitAuth(event){
+  event.preventDefault();
+  if(!supabaseAuthClient)return;
+  const button=document.getElementById("authSubmitButton");
+  const message=document.getElementById("authModalMessage");
+  button.disabled=true;
+  message.textContent=authMode==="signup"?"Creating account…":"Signing in…";
+  try{
+    const email=document.getElementById("authEmail").value.trim();
+    const password=document.getElementById("authPassword").value;
+    const result=authMode==="signup"
+      ?await supabaseAuthClient.auth.signUp({email,password})
+      :await supabaseAuthClient.auth.signInWithPassword({email,password});
+    if(result.error){
+      message.textContent=authMode==="signup"
+        ?"Account creation failed. Check the email and password, then try again."
+        :"Sign-in failed. Check the email and password, then try again.";
+      return;
+    }
+    if(authMode==="signup"&&!result.data.session){
+      message.textContent="Account created. Check your email for the confirmation link, then sign in.";
+      document.getElementById("authPassword").value="";
+      return;
+    }
+    document.getElementById("authPassword").value="";
+    document.getElementById("authModal").classList.remove("open");
+    renderAuthSession(result.data.session);
+  }catch{
+    message.textContent="Authentication is unavailable right now. The local demo remains usable.";
+  }finally{
+    button.disabled=false;
+  }
+}
+async function signOutUser(){
+  if(!supabaseAuthClient)return;
+  const {error}=await supabaseAuthClient.auth.signOut();
+  if(error){toast("Sign-out failed. Please try again.");return}
+  renderAuthSession(null);
 }
 function persist(){
   if(!requireDemoMode("Saving data"))return false;
@@ -1575,6 +1717,7 @@ document.getElementById("rDate").value=today();
 updateInvoiceMode();
 updateCorrectionField();
 void initializeApplication();
+void initializeSupabaseAuth();
 </script>
 </body>
 </html>
