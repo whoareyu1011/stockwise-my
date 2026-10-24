@@ -72,9 +72,9 @@ EntreMaster provides a secure, multi-tenant inventory management platform backed
 ├── pools.cjs                  # Database connection pool manager
 ├── run-phase2-isolated.py     # Offline automated security audit test runner
 ├── submission/                # Required hackathon submission documents
-│   ├── SDC2026_TeamName_Preliminary.pdf      # Preliminary submission
-│   ├── SDC2026_TeamName_TechDeclaration.pdf  # Technical declaration
-│   └── SDC2026_TeamName_Replit_POU.pdf       # Replit proof of use
+│   ├── SDC2026_Prompt Masters_Preliminary.pdf      # Preliminary submission
+│   ├── SDC2026_Prompt Masters_TechDeclaration.pdf  # Technical declaration
+│   └── SDC2026_Prompt Masters_Replit_POU.pdf       # Replit proof of use
 ├── .env.example               # Example environment variables
 ├── .gitignore
 ├── .replit                    # Replit run configuration
