@@ -203,7 +203,7 @@ python3 run-phase2-isolated.py
 
 ## License
 
-This project is licensed under the [Apache License 2.0](https://www.google.com/search?q=LICENSE).
+This project is licensed under the [Apache License 2.0](https://github.com/whoareyu1011/stockwise-my/blob/af44afeae1438e24923e9c89f835beb39dc3c762/LICENSE).
 
 ```
 
