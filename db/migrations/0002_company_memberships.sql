@@ -20,6 +20,13 @@ BEGIN
   IF pg_catalog.to_regclass('stockwise.company_memberships') IS NOT NULL THEN
     RAISE EXCEPTION 'stockwise.company_memberships already exists; inspect migration state';
   END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_attribute
+    WHERE attrelid = pg_catalog.to_regclass('stockwise.companies')
+      AND attname = 'status' AND NOT attisdropped
+  ) THEN
+    RAISE EXCEPTION 'stockwise.companies.status already exists; inspect schema before continuing';
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_roles
     WHERE rolname = 'stockwise_owner'
@@ -91,6 +98,13 @@ $preflight$;
 
 SET LOCAL ROLE stockwise_owner;
 
+-- Migration 0001 has no company lifecycle field. Preserve its existing
+-- effective behavior by treating prior companies as active; suspension is
+-- explicit and cannot be represented by an unchecked value.
+ALTER TABLE stockwise.companies
+  ADD COLUMN status text NOT NULL DEFAULT 'active'
+    CONSTRAINT companies_status_check CHECK (status IN ('active','suspended'));
+
 CREATE TABLE stockwise.company_memberships (
   company_id uuid NOT NULL
     REFERENCES stockwise.companies(id) ON DELETE RESTRICT,
@@ -133,6 +147,8 @@ GRANT SELECT ON TABLE stockwise.company_memberships TO authenticated;
 
 COMMENT ON TABLE stockwise.company_memberships IS
   'Company membership mapping for Supabase Auth UUIDs; authenticated users may read only their own rows. Membership writes require a separately reviewed trusted workflow.';
+COMMENT ON COLUMN stockwise.companies.status IS
+  'Company lifecycle status. Only active companies may authorize requests; migration 0001 had no status field, so existing rows default to active.';
 COMMENT ON COLUMN stockwise.company_memberships.user_id IS
   'Stable UUID from auth.users.id; never accepted as authority from browser input.';
 COMMENT ON COLUMN stockwise.company_memberships.role IS
