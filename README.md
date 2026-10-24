@@ -97,7 +97,7 @@ User (Browser) ──► Replit Deployments (Node.js/Express Backend) ──► 
 
 ## How to Run
 
-### Option 1 — Run on Replit (Recommended)
+### Option 1 — Run on Replit
 
 1. Open the [Replit Project](https://replit.com/@your-username/stockwise-my), or import this repository via **Create Repl → Import from GitHub**.
 2. Open the **Secrets** tab (🔒) in Replit and set the environment variables listed in `.env.example`:
@@ -156,13 +156,13 @@ python3 run-phase2-isolated.py
 
 ---
 
-## How We Use Replit *(Required)*
+## How We Use Replit
 
 * **Development:** Collaborated in real-time using Replit Multiplayer for rapid full-stack iteration and backend route debugging.
 * **Hosting:** The production web service is deployed directly via Replit Deployments.
 * **Secrets Management:** Securely stored sensitive database connection strings (`DATABASE_URL`) and signing keys (`JWT_SECRET`) using Replit Secrets.
 
-📄 Proof of use: [`submission/SDC2026_TeamName_Replit_POU.pdf`](https://www.google.com/search?q=submission/SDC2026_TeamName_Replit_POU.pdf)
+📄 Proof of use: [`submission/SDC2026_Prompt Masters_Replit_POU.pdf`](https://www.google.com/search?q=submission/SDC2026_TeamName_Replit_POU.pdf)
 
 ---
 
