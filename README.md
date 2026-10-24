@@ -34,7 +34,7 @@ Small and medium-sized enterprises (SMEs) in Malaysia face severe operational in
 
 ### Solution
 
-StockWise MY provides a secure, multi-tenant inventory management platform backed by PostgreSQL Row-Level Security (RLS) and automated stock tracking. By streamlining real-time stock levels, calculating precise reorder thresholds, and providing role-based security boundaries, StockWise MY helps businesses drastically reduce inventory waste and operational overhead.
+EntreMaster provides a secure, multi-tenant inventory management platform backed by PostgreSQL Row-Level Security (RLS) and automated stock tracking. By streamlining real-time stock levels, calculating precise reorder thresholds, and providing role-based security boundaries, StockWise MY helps businesses drastically reduce inventory waste and operational overhead.
 
 ### Key Features
 
@@ -183,7 +183,7 @@ python3 run-phase2-isolated.py
 
 | Name | Role | GitHub |
 | --- | --- | --- |
-| [Name] | Team Lead / Backend | [@username](https://github.com/username) |
+| Lian Yi Yen | Team Lead / Backend | [@username](https://github.com/username) |
 | [Name] | Frontend / UI | [@username](https://github.com/username) |
 | [Name] | Database Admin | [@username](https://github.com/username) |
 
