@@ -99,7 +99,7 @@ User (Browser) ──► Replit Deployments (Node.js/Express Backend) ──► 
 
 ### Option 1 — Run on Replit
 
-1. Open the [Replit Project](https://replit.com/@your-username/stockwise-my), or import this repository via **Create Repl → Import from GitHub**.
+1. Open the [Replit Project](https://replit.com/@whoareyu/stockwise-my?orgSlug=#server.js), or import this repository via **Create Repl → Import from GitHub**.
 2. Open the **Secrets** tab (🔒) in Replit and set the environment variables listed in `.env.example`:
    - `DATABASE_URL` (Your PostgreSQL / Supabase SSL connection string)
    - `JWT_SECRET` (Secret token key)
