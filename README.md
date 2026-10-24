@@ -183,7 +183,7 @@ python3 run-phase2-isolated.py
 
 | Name | Role | GitHub |
 | --- | --- | --- |
-| Lian Yi Yen | Team Lead / Backend | [@username](https://github.com/username) |
+| Lian Yi Yen | Team Lead / Backend | [@yiyenlian7-stack](https://github.com/yiyenlian7-stack) |
 | Chan Yu Earn | Frontend / UI | [@whoareyu1011](https://github.com/whoareyu1011) |
 | Wong Hsin Ling | Database Admin | [@whoareyu1011](https://github.com/whoareyu1011) |
 
