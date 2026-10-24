@@ -278,7 +278,7 @@ tbody tr:last-child td{border-bottom:0}
 
 <section class="page" id="page-record" data-demo-only>
   <div class="page-intro"><div><h2>Record stock movement</h2><p>Record a sale, purchase or manual stock-in / stock-out adjustment.</p></div></div>
-  <div class="notice">Enter or review the details before confirming. Sales and stock-out adjustments cannot exceed the available balance. Screenshot OCR is not enabled in this demo.</div>
+  <div class="notice">Screenshot text is not extracted in this demo. Use the image preview to enter or match the order details below, review them, and confirm before stock changes.</div>
   <div class="card">
     <div class="stepper"><div class="step active" id="step1">1. Enter details</div><div class="step" id="step2">2. Review</div><div class="step" id="step3">3. Saved</div></div>
     <div id="recordEntry">
@@ -288,10 +288,11 @@ tbody tr:last-child td{border-bottom:0}
         <div class="field"><label>Transaction date *</label><input type="date" id="rDate"></div>
         <div class="field"><label>Reference / order number</label><input id="rRef" placeholder="Optional reference"></div>
         <div class="field full"><label id="rFileLabel">Upload chat screenshot / order document</label><input id="rFile" type="file" accept="image/*,.pdf" onchange="showAttachment()"><div class="help" id="fileInfo">Demo limitation: OCR is not installed. No order details are extracted; enter them manually and review against the image.</div><img id="attachmentPreview" alt="Uploaded screenshot preview" style="display:none;max-width:280px;max-height:220px;object-fit:contain;border-radius:8px;margin-top:8px"><button class="btn small" id="clearAttachmentButton" type="button" onclick="clearAttachment()" style="display:none;margin-top:8px">Remove attachment</button></div>
-        <div class="field full"><label>Notes</label><textarea id="rNotes" placeholder="Optional details, payment status or delivery notes"></textarea></div>
+        <div class="field full" id="screenshotUncertaintyField" hidden><label for="rUncertain">Unclear or unmatched screenshot details</label><textarea id="rUncertain" placeholder="Note unreadable product names, uncertain quantities or prices, missing dates, or other details to check."></textarea><div class="help">Nothing is inferred. Unclear fields stay visible in the review step for you to check.</div></div>
+        <div class="field full"><label>Notes</label><textarea id="rNotes" placeholder="Optional payment status or delivery notes"></textarea></div>
       </div>
       <div style="margin-top:20px">
-        <div class="card-head"><div><h3 id="lineTitle">Items sold to customer</h3><p id="lineHelp">OCR is not installed. Choose each matching product from the catalogue; prices may prefill from the catalogue and must be checked against the screenshot.</p></div><button class="btn small" onclick="addLine()">＋ Add item</button></div>
+        <div class="card-head"><div><h3 id="lineTitle">Items sold to customer</h3><p id="lineHelp">OCR is not installed. Choose each matching product from the catalogue and enter the quantity and unit price shown in the order.</p></div><button class="btn small" onclick="addLine()">＋ Add item</button></div>
         <div class="product-lines" id="productLines"></div>
       </div>
       <div class="totals">
@@ -1093,10 +1094,10 @@ function updateMovementLabels(){
   const lineHelp=document.getElementById("lineHelp");
   if(type==="sale"){
     uploadLabel.textContent="Upload customer order chat screenshot (optional)";
-    lineHelp.textContent="OCR is not installed. Choose each matching product from the catalogue; prices may prefill from the catalogue and must be checked against the screenshot. Add unmatched products in Inventory first.";
+    lineHelp.textContent="OCR is not installed. Match products manually from the catalogue and enter the screenshot quantity, selling price and discount. Screenshot prices are not prefilled from the catalogue.";
   }else if(type==="purchase"){
     uploadLabel.textContent="Upload supplier purchase chat screenshot (optional)";
-    lineHelp.textContent="OCR is not installed. Choose each matching product from the catalogue; costs may prefill from the catalogue and must be checked against the screenshot. Add unmatched products in Inventory first.";
+    lineHelp.textContent="OCR is not installed. Match products manually from the catalogue and enter the screenshot quantity, unit cost and discount. Screenshot prices are not prefilled from the catalogue.";
   }else{
     uploadLabel.textContent="Upload reference image or document (optional)";
     lineHelp.textContent="Choose the affected products from the catalogue. Screenshot text is not extracted in this demo.";
@@ -1111,9 +1112,10 @@ function updateMovementLabels(){
 }
 function resetRecord(){
   recordDraft=null;selectedAttachment="";selectedAttachmentMeta=null;attachmentReadPending=false;
-  ["rParty","rRef","rNotes"].forEach(id=>document.getElementById(id).value="");
+  ["rParty","rRef","rNotes","rUncertain"].forEach(id=>document.getElementById(id).value="");
   document.getElementById("rType").value="sale";document.getElementById("rDate").value=today();
   document.getElementById("rFile").value="";
+  document.getElementById("screenshotUncertaintyField").hidden=true;
   document.getElementById("attachmentPreview").style.display="none";document.getElementById("attachmentPreview").src="";
   document.getElementById("clearAttachmentButton").style.display="none";
   document.getElementById("recordEntry").style.display="block";
@@ -1126,14 +1128,18 @@ function clearAttachment(){
   selectedAttachment="";selectedAttachmentMeta=null;attachmentReadPending=false;
   const input=document.getElementById("rFile"),img=document.getElementById("attachmentPreview");
   input.value="";img.src="";img.style.display="none";
+  document.getElementById("rUncertain").value="";
+  document.getElementById("screenshotUncertaintyField").hidden=true;
   document.getElementById("clearAttachmentButton").style.display="none";
-  document.getElementById("fileInfo").textContent="No screenshot selected. OCR is not installed; enter order details manually.";
+  document.getElementById("fileInfo").textContent="No screenshot selected. OCR is not installed; use the manual fields and review step.";
 }
 function showAttachment(){
   const input=document.getElementById("rFile"),file=input.files?.[0];
   const info=document.getElementById("fileInfo"),img=document.getElementById("attachmentPreview");
   const clearButton=document.getElementById("clearAttachmentButton");
   selectedAttachment="";selectedAttachmentMeta=null;attachmentReadPending=false;img.style.display="none";img.src="";clearButton.style.display="none";
+  document.getElementById("rUncertain").value="";
+  document.getElementById("screenshotUncertaintyField").hidden=true;
   if(!file){info.textContent="No screenshot selected. OCR is not installed; enter order details manually.";return}
   if(file.size>8*1024*1024){input.value="";info.textContent="File exceeds the 8 MB demo limit.";return}
   const extensionMime=({png:"image/png",jpg:"image/jpeg",jpeg:"image/jpeg",webp:"image/webp",gif:"image/gif",bmp:"image/bmp",pdf:"application/pdf"})[(file.name.split(".").pop()||"").toLowerCase()]||"";
@@ -1142,8 +1148,16 @@ function showAttachment(){
     input.value="";info.textContent="Choose an image or PDF file.";return;
   }
   selectedAttachmentMeta={name:file.name,type:mime||"unknown",size:file.size};
+  document.getElementById("screenshotUncertaintyField").hidden=false;
   clearButton.style.display="inline-flex";
-  info.textContent=`${file.name} · ${Math.ceil(file.size/1024)} KB. No data was extracted: OCR is not installed. Enter and verify details manually.`;
+  info.textContent=`${file.name} · ${Math.ceil(file.size/1024)} KB. Nothing was extracted. Enter and match the details manually, then list any uncertain fields below.`;
+  document.querySelectorAll(".product-line .line-price").forEach(price=>{
+    if(price.dataset.priceSource==="catalogue"){
+      price.value="";
+      price.dataset.priceSource="manual";
+    }
+  });
+  calcRecordTotals();
   if(mime.startsWith("image/")){
     attachmentReadPending=true;
     const reader=new FileReader();
@@ -1166,7 +1180,7 @@ function addLine(line={}){
   const opts=db.products.map(p=>`<option value="${esc(p.id)}" ${line.productId===p.id?"selected":""}>${esc(p.sku)} — ${esc(p.name)}</option>`).join("");
   row.innerHTML=`<div class="field"><label>Product</label><select class="line-product" onchange="lineChanged(this)"><option value="">Select product</option>${opts}</select></div>
     <div class="field"><label>Qty</label><input class="line-qty" type="number" min="1" step="1" value="${line.qty??1}" oninput="calcRecordTotals()"></div>
-    <div class="field"><label class="line-price-label">Unit selling price (RM)</label><input class="line-price" type="number" min="0" step="0.01" value="${line.price??""}" oninput="calcRecordTotals()"></div>
+   <div class="field"><label class="line-price-label">Unit selling price (RM)</label><input class="line-price" type="number" min="0" step="0.01" value="${line.price??""}" data-price-source="manual" oninput="this.dataset.priceSource='manual';calcRecordTotals()"></div>
     <div class="field"><label>Line discount (RM)</label><input class="line-discount" type="number" min="0" step="0.01" value="${line.discount??0}" oninput="calcRecordTotals()"></div>
     <button class="remove-line" title="Remove item" onclick="this.closest('.product-line').remove();calcRecordTotals()">×</button>`;
   container.appendChild(row);
@@ -1174,9 +1188,13 @@ function addLine(line={}){
   calcRecordTotals();
 }
 function renderLines(){document.getElementById("productLines").innerHTML="";addLine()}
+function screenshotLinePrice(product,type,hasScreenshot){
+  if(!product||hasScreenshot)return "";
+  return (type==="purchase"||type==="adjustment_in")?product.cost:product.price;
+}
 function lineChanged(select,keepPrice=false){
   const p=getProduct(select.value),row=select.closest(".product-line"),price=row.querySelector(".line-price");
-  if(p&&!keepPrice){const type=document.getElementById("rType").value;price.value=(type==="purchase"||type==="adjustment_in")?p.cost:p.price}
+  if(p&&!keepPrice){const type=document.getElementById("rType").value;price.value=screenshotLinePrice(p,type,Boolean(selectedAttachmentMeta));price.dataset.priceSource=price.value===""?"manual":"catalogue"}
   calcRecordTotals();
 }
 function collectLines(){
@@ -1260,10 +1278,10 @@ function reviewRecord(){
   if(err){toast(err);return}
   const lines=enteredLines.map(({priceEntered,...line})=>line);
   const {subtotal,discount,total}=calculateRecordAmounts(lines);
-  recordDraft={id:uid("TX"),type,party,date,ref:document.getElementById("rRef").value.trim()||uid("REF"),notes:document.getElementById("rNotes").value.trim(),lines,subtotal,discount,total,attachment:selectedAttachment,attachmentMeta:selectedAttachmentMeta?{...selectedAttachmentMeta}:null,paymentStatus:"Unspecified"};
+  recordDraft={id:uid("TX"),type,party,date,ref:document.getElementById("rRef").value.trim()||uid("REF"),notes:document.getElementById("rNotes").value.trim(),uncertainDetails:document.getElementById("rUncertain").value.trim(),lines,subtotal,discount,total,attachment:selectedAttachment,attachmentMeta:selectedAttachmentMeta?{...selectedAttachmentMeta}:null,paymentStatus:"Unspecified"};
   const unitLabel=type==="purchase"?"Unit cost":type==="sale"?"Unit selling price":"Unit value";
   const screenshotReview=recordDraft.attachmentMeta
-    ?`<div class="notice"><strong>Source file:</strong> ${esc(recordDraft.attachmentMeta.name)}<br><span class="help">No OCR text was extracted. The fields below are form values; prices or costs may be prefilled from the catalogue. Verify the party, date, quantities, prices and discounts against the uploaded file.</span>${recordDraft.attachment?`<div><img src="${esc(recordDraft.attachment)}" alt="Uploaded order screenshot for review" style="max-width:100%;max-height:420px;object-fit:contain;border-radius:8px;margin-top:12px"></div>`:`<div class="help">PDF contents are not previewed or stored in this demo; only file details are retained.</div>`}</div>`
+     ?`<div class="notice"><strong>Source file:</strong> ${esc(recordDraft.attachmentMeta.name)}<br><span class="help">No OCR text was extracted. Order type, party, date, products, quantities, prices and discounts were entered or selected manually. Verify them against the file.</span>${recordDraft.attachment?`<div><img src="${esc(recordDraft.attachment)}" alt="Uploaded order screenshot for review" style="max-width:100%;max-height:420px;object-fit:contain;border-radius:8px;margin-top:12px"></div>`:`<div class="help">PDF contents are not previewed or stored in this demo; only file details are retained.</div>`}</div>`
     :`<div class="notice">No screenshot attached. No information was extracted automatically; review the manually entered details below.</div>`;
   document.getElementById("reviewSummary").innerHTML=`
     ${screenshotReview}
@@ -1273,6 +1291,7 @@ function reviewRecord(){
     <div class="table-wrap"><table><thead><tr><th>SKU / product</th><th>Qty</th><th>${unitLabel}</th><th>Discount</th><th>Line total</th></tr></thead><tbody>${lines.map(l=>`<tr><td>${esc(l.sku)} · ${esc(l.name)}${type==="sale"?`<br><span class="muted">Unit cost at sale: ${formatRecordedSaleCost(l)}</span>`:""}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.discount)}</td><td>${money(roundMoney(l.qty*l.price-l.discount))}</td></tr>`).join("")}</tbody></table></div>
     <div class="totals"><div class="total-row"><span>Subtotal</span><strong>${money(subtotal)}</strong></div><div class="total-row"><span>Discount</span><strong>${money(discount)}</strong></div><div class="total-row final"><span>Total</span><strong>${money(recordDraft.total)}</strong></div></div>
     <div class="review-item"><span>Product matching</span><span>Products were selected manually from the catalogue. No OCR matching was performed.</span></div>
+     ${recordDraft.attachmentMeta?`<div class="review-item"><span>Unclear / unmatched details</span><span>${esc(recordDraft.uncertainDetails||"None noted; check against the image")}</span></div>`:""}
     <div class="review-item"><span>Notes</span><span>${esc(recordDraft.notes||"—")}</span></div>`;
   document.getElementById("recordEntry").style.display="none";document.getElementById("recordReview").style.display="block";
   document.getElementById("step2").classList.add("active");window.scrollTo({top:0,behavior:"smooth"});
@@ -1395,6 +1414,7 @@ function showHistoryDetail(id){
     <div class="review-item"><span>Gross profit</span><strong>${t.type==="sale"?(saleProfit===null?"Unavailable":money(saleProfit)):"Not applicable"}</strong></div>
     ${t.type==="sale"&&saleProfit===null?'<div class="help">Historical sales amount or sale-time cost data is incomplete. Current product cost was not substituted.</div>':""}
     <div class="review-item"><span>Payment status</span><strong>${esc(t.paymentStatus||"Unspecified")}</strong></div>
+     ${t.uncertainDetails?`<div class="review-item"><span>Unclear / unmatched details</span><span>${esc(t.uncertainDetails)}</span></div>`:""}
     <div class="review-item"><span>Notes</span><span>${esc(t.notes||"—")}</span></div>
     <div class="form-actions"><button class="btn primary" onclick="navigate('invoice');document.getElementById('invTransaction').value='${t.id}';loadInvoiceTransaction()">Prepare e-Invoice draft</button></div>`;
   box.scrollIntoView({behavior:"smooth",block:"start"});
