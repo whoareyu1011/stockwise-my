@@ -210,6 +210,8 @@ tbody tr:last-child td{border-bottom:0}
   <div class="nav-label">WORKSPACE</div>
   <button class="nav active" data-page="overview" data-demo-only><span class="ico">▦</span> Overview</button>
   <button class="nav" data-page="inventory"><span class="ico">▤</span> Inventory</button>
+  <button class="nav" data-page="sales" data-demo-only><span class="ico">↗</span> Sales records</button>
+  <button class="nav" data-page="purchases" data-demo-only><span class="ico">↙</span> Purchase records</button>
   <button class="nav" data-page="record" data-demo-only><span class="ico">＋</span> Record movement</button>
   <button class="nav" data-page="history" data-demo-only><span class="ico">◷</span> Transaction history</button>
   <button class="nav" data-page="movement-history" data-demo-only><span class="ico">↕</span> Stock movement history</button>
@@ -243,8 +245,8 @@ tbody tr:last-child td{border-bottom:0}
   </div>
   <div class="grid section-grid">
     <div class="card">
-      <div class="card-head"><div><h3>Latest customer orders</h3><p>Items, discounts and estimated profit</p></div><button class="btn small" onclick="navigate('history')">View all</button></div>
-      <div class="table-wrap"><table><thead><tr><th>Customer / date</th><th>Items</th><th>Order total</th><th>Profit est.</th></tr></thead><tbody id="latestOrders"></tbody></table></div>
+      <div class="card-head"><div><h3>Recent sales &amp; purchases</h3><p>Saved customer and supplier records</p></div><div><button class="btn small" onclick="navigate('sales')">Sales</button> <button class="btn small" onclick="navigate('purchases')">Purchases</button></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Party / date</th><th>Type</th><th>Items</th><th>Total</th><th>Profit est.</th></tr></thead><tbody id="latestOrders"></tbody></table></div>
     </div>
     <div class="card">
       <div class="card-head"><div><h3>Stock alerts</h3><p>Products that may need replenishment</p></div><button class="btn small" onclick="navigate('inventory')">Inventory</button></div>
@@ -304,6 +306,20 @@ tbody tr:last-child td{border-bottom:0}
       <div id="savedSummary"></div>
       <div class="form-actions"><button class="btn" onclick="resetRecord()">Record another</button><button class="btn primary" onclick="navigate('history')">View history</button><button class="btn" onclick="navigate('invoice')">Create e-Invoice draft</button></div>
     </div>
+  </div>
+</section>
+
+<section class="page" id="page-sales" data-demo-only>
+  <div class="page-intro"><div><h2>Sales records</h2><p>Record customer sales with product quantities, selling prices and discounts.</p></div><button class="btn primary" onclick="openRecord('sale')">＋ New sales record</button></div>
+  <div class="card">
+    <div class="table-wrap"><table><thead><tr><th>Date / reference</th><th>Customer</th><th>Product lines / unit selling price</th><th>Subtotal</th><th>Discount</th><th>Total</th><th>Details</th></tr></thead><tbody id="salesRecordsBody"></tbody></table></div>
+  </div>
+</section>
+
+<section class="page" id="page-purchases" data-demo-only>
+  <div class="page-intro"><div><h2>Purchase records</h2><p>Record supplier purchases with product quantities and unit costs. Confirmed purchases increase stock.</p></div><button class="btn primary" onclick="openRecord('purchase')">＋ New purchase record</button></div>
+  <div class="card">
+    <div class="table-wrap"><table><thead><tr><th>Date / reference</th><th>Supplier</th><th>Product lines / unit cost</th><th>Subtotal</th><th>Discount</th><th>Total</th><th>Details</th></tr></thead><tbody id="purchaseRecordsBody"></tbody></table></div>
   </div>
 </section>
 
@@ -593,9 +609,11 @@ function navigate(page){
   document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));
   document.getElementById("page-"+page).classList.add("active");
   document.querySelectorAll(".nav").forEach(n=>n.classList.toggle("active",n.dataset.page===page));
-  const names={overview:"Overview",inventory:"Inventory",record:"Record movement",history:"Transaction history","movement-history":"Stock movement history",invoice:"E-Invoice"};
+  const names={overview:"Overview",inventory:"Inventory",sales:"Sales records",purchases:"Purchase records",record:"Record movement",history:"Transaction history","movement-history":"Stock movement history",invoice:"E-Invoice"};
   document.getElementById("pageTitle").textContent=names[page]||"StockWise MY";
   if(page==="inventory")renderInventory();
+  if(page==="sales")renderSalesRecords();
+  if(page==="purchases")renderPurchaseRecords();
   if(page==="history")renderHistory();
   if(page==="movement-history")renderStockMovementHistory();
   if(page==="invoice"){refreshInvoiceTransactions();updateCorrectionField();renderInvoiceLineEditor();renderInvoiceHistory()}
@@ -619,23 +637,25 @@ function grossProfit(tx){
 }
 function unitsInStock(){return db.products.reduce((s,p)=>s+Number(p.stock||0),0)}
 function renderAll(){
-  renderOverview();renderInventory();renderHistory();renderStockMovementHistory();refreshInvoiceTransactions();renderInvoiceHistory();
+  renderOverview();renderInventory();renderSalesRecords();renderPurchaseRecords();renderHistory();renderStockMovementHistory();refreshInvoiceTransactions();renderInvoiceHistory();
 }
 function renderOverview(){
-  const sales=db.transactions.filter(t=>t.type==="sale").reduce((s,t)=>s+t.total,0);
-  const costs=db.transactions.filter(t=>t.type==="purchase").reduce((s,t)=>s+t.total,0);
+  const sales=db.transactions.filter(t=>t.type==="sale").reduce((s,t)=>s+Number(t.total||0),0);
+  const costs=db.transactions.filter(t=>t.type==="purchase").reduce((s,t)=>s+Number(t.total||0),0);
   const profit=db.transactions.reduce((s,t)=>s+(grossProfit(t)||0),0);
   document.getElementById("mSales").textContent=money(sales);
   document.getElementById("mCosts").textContent=money(costs);
   document.getElementById("mProfit").textContent=money(profit);
   document.getElementById("mProducts").textContent=db.products.length;
   document.getElementById("mUnits").textContent=unitsInStock()+" units in stock";
-  const latest=db.transactions.filter(t=>t.type==="sale").slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,6);
+  const latest=db.transactions.filter(t=>t.type==="sale"||t.type==="purchase")
+    .slice().sort((a,b)=>String(b.createdAt||b.date).localeCompare(String(a.createdAt||a.date))).slice(0,6);
   document.getElementById("latestOrders").innerHTML=latest.length?latest.map(t=>`<tr>
     <td><div class="strong">${esc(t.party)}</div><div class="muted">${esc(t.date)}</div></td>
+    <td><span class="pill ${t.type==="sale"?"blue":"green"}">${t.type==="sale"?"Sale":"Purchase"}</span></td>
     <td>${t.lines.reduce((s,l)=>s+l.qty,0)} units<br><span class="muted">${t.lines.length} product(s)</span></td>
     <td class="strong">${money(t.total)}<br><span class="muted">Disc. ${money(t.discount)}</span></td>
-    <td class="strong" style="color:var(--green)">${money(grossProfit(t))}</td></tr>`).join(""):`<tr><td colspan="4"><div class="empty">No customer orders yet. Create your first record.</div></td></tr>`;
+    <td class="strong" style="color:var(--green)">${t.type==="sale"?money(grossProfit(t)):"—"}</td></tr>`).join(""):`<tr><td colspan="5"><div class="empty">No sales or purchase records yet.</div></td></tr>`;
   const alerts=db.products.filter(p=>p.stock<=p.threshold).sort((a,b)=>a.stock-b.stock).slice(0,6);
   document.getElementById("stockAlerts").innerHTML=alerts.length?alerts.map(p=>`<div>
     <div class="stock-row"><div><div class="stock-name">${esc(p.name)}</div><div class="stock-sub">${esc(p.sku)} · ${esc(p.category)}</div></div>
@@ -784,7 +804,38 @@ function exportHistory(){
 }
 
 /* RECORD MOVEMENT */
-function openRecord(){if(!requireDemoMode("Recording stock movements"))return;navigate("record");resetRecord()}
+function openRecord(type="sale"){
+  if(!requireDemoMode("Recording stock movements"))return;
+  if(!["sale","purchase","adjustment_in","adjustment_out"].includes(type))type="sale";
+  navigate("record");resetRecord();
+  document.getElementById("rType").value=type;
+  updateMovementLabels();
+}
+function openTransactionDetail(id){
+  navigate("history");
+  showHistoryDetail(id);
+}
+function renderCommercialRecords(type,bodyId){
+  const body=document.getElementById(bodyId);
+  if(!body)return;
+  const rows=db.transactions.filter(t=>t.type===type).slice()
+    .sort((a,b)=>String(b.createdAt||b.date).localeCompare(String(a.createdAt||a.date)));
+  body.innerHTML=rows.length?rows.map(t=>{
+    const unitLabel=type==="purchase"?"Unit cost":"Unit selling price";
+    const lineSummary=t.lines.map(line=>`<div><strong>${esc(line.sku)}</strong> · ${esc(line.name)} × ${line.qty}<br><span class="muted">${unitLabel}: ${money(line.price)}${Number(line.discount||0)>0?` · Discount: ${money(line.discount)}`:""}</span></div>`).join("<hr style=\"border:0;border-top:1px solid var(--line);margin:8px 0\">");
+    return `<tr>
+      <td><div class="strong">${esc(t.date)}</div><div class="muted">${esc(t.ref)}</div></td>
+      <td>${esc(t.party)}</td>
+      <td>${lineSummary}</td>
+      <td>${money(t.subtotal)}</td>
+      <td>${money(t.discount)}</td>
+      <td class="strong">${money(t.total)}</td>
+      <td><button class="btn small" onclick="openTransactionDetail('${esc(t.id)}')">View</button></td>
+    </tr>`;
+  }).join(""):`<tr><td colspan="7"><div class="empty">No ${type==="sale"?"sales":"purchase"} records yet. Add the first one above.</div></td></tr>`;
+}
+function renderSalesRecords(){renderCommercialRecords("sale","salesRecordsBody")}
+function renderPurchaseRecords(){renderCommercialRecords("purchase","purchaseRecordsBody")}
 function openProductMovement(productId,type){
   if(!requireDemoMode("Recording stock movements"))return;
   const product=getProduct(productId);
@@ -817,6 +868,8 @@ function updateMovementLabels(){
     party.placeholder="e.g. stock count correction";
     document.getElementById("lineTitle").textContent="Items for stock adjustment";
   }
+  const priceLabel=type==="purchase"?"Unit cost (RM)":type==="sale"?"Unit selling price (RM)":"Unit value (RM)";
+  document.querySelectorAll(".line-price-label").forEach(label=>{label.textContent=priceLabel});
   if(!document.querySelector(".product-line"))renderLines();
   else calcRecordTotals();
 }
@@ -849,7 +902,7 @@ function addLine(line={}){
   const opts=db.products.map(p=>`<option value="${esc(p.id)}" ${line.productId===p.id?"selected":""}>${esc(p.sku)} — ${esc(p.name)}</option>`).join("");
   row.innerHTML=`<div class="field"><label>Product</label><select class="line-product" onchange="lineChanged(this)"><option value="">Select product</option>${opts}</select></div>
     <div class="field"><label>Qty</label><input class="line-qty" type="number" min="1" step="1" value="${line.qty??1}" oninput="calcRecordTotals()"></div>
-    <div class="field"><label>Unit price (RM)</label><input class="line-price" type="number" min="0" step="0.01" value="${line.price??""}" oninput="calcRecordTotals()"></div>
+    <div class="field"><label class="line-price-label">Unit selling price (RM)</label><input class="line-price" type="number" min="0" step="0.01" value="${line.price??""}" oninput="calcRecordTotals()"></div>
     <div class="field"><label>Line discount (RM)</label><input class="line-discount" type="number" min="0" step="0.01" value="${line.discount??0}" oninput="calcRecordTotals()"></div>
     <button class="remove-line" title="Remove item" onclick="this.closest('.product-line').remove();calcRecordTotals()">×</button>`;
   container.appendChild(row);
@@ -872,13 +925,22 @@ function collectLines(){
     }:null;
   }).filter(Boolean);
 }
+function isCurrencyAmount(value){
+  if(!Number.isFinite(value))return false;
+  const cents=Math.round(value*100);
+  return Number.isSafeInteger(cents)&&Math.abs(value-cents/100)<1e-8;
+}
+function calculateRecordAmounts(lines){
+  const subtotal=roundMoney(lines.reduce((sum,line)=>sum+roundMoney(line.qty*line.price),0));
+  const discount=roundMoney(lines.reduce((sum,line)=>sum+roundMoney(line.discount),0));
+  return {subtotal,discount,total:roundMoney(subtotal-discount)};
+}
 function calcRecordTotals(){
   const lines=collectLines();
-  const subtotal=lines.reduce((s,l)=>s+l.qty*l.price,0);
-  const discount=lines.reduce((s,l)=>s+l.discount,0);
+  const {subtotal,discount,total}=calculateRecordAmounts(lines);
   document.getElementById("rSubtotal").textContent=money(subtotal);
   document.getElementById("rDiscount").textContent=money(discount);
-  document.getElementById("rTotal").textContent=money(Math.max(0,subtotal-discount));
+  document.getElementById("rTotal").textContent=money(Math.max(0,total));
 }
 function validateLines(lines,type){
   if(!lines.length)return "Add at least one valid product.";
@@ -887,7 +949,10 @@ function validateLines(lines,type){
   for(const l of lines){
     if(!Number.isSafeInteger(l.qty)||l.qty<=0)return "Each quantity must be a positive whole number.";
     if(!Number.isFinite(l.price)||l.price<0||!Number.isFinite(l.discount)||l.discount<0)return "Check each item price and discount.";
-    if(l.discount>l.qty*l.price)return "A line discount cannot exceed its line subtotal.";
+    if(!isCurrencyAmount(l.price)||!isCurrencyAmount(l.discount))return "Prices and discounts must use no more than two decimal places.";
+    const lineSubtotal=roundMoney(l.qty*l.price);
+    if(!isCurrencyAmount(lineSubtotal))return "A line amount exceeds the supported range.";
+    if(l.discount>lineSubtotal)return "A line discount cannot exceed its line subtotal.";
     const p=getProduct(l.productId);
     if(!p)return "A selected product no longer exists.";
     if(!Number.isSafeInteger(p.stock)||p.stock<0)return "The current stock balance for "+p.name+" is invalid.";
@@ -903,6 +968,8 @@ function validateLines(lines,type){
       return "The resulting stock quantity is too large for "+p.name+".";
     }
   }
+  const amounts=calculateRecordAmounts(lines);
+  if(!isCurrencyAmount(amounts.subtotal)||!isCurrencyAmount(amounts.discount)||!isCurrencyAmount(amounts.total))return "The record total exceeds the supported amount range.";
   return "";
 }
 function reviewRecord(){
@@ -916,13 +983,14 @@ function reviewRecord(){
     return;
   }
   if(err){toast(err);return}
-  const subtotal=lines.reduce((s,l)=>s+l.qty*l.price,0),discount=lines.reduce((s,l)=>s+l.discount,0);
-  recordDraft={type,party,date,ref:document.getElementById("rRef").value.trim()||uid("TX"),notes:document.getElementById("rNotes").value.trim(),lines,subtotal,discount,total:subtotal-discount,attachment:selectedAttachment,paymentStatus:"Unspecified"};
+  const {subtotal,discount,total}=calculateRecordAmounts(lines);
+  recordDraft={id:uid("TX"),type,party,date,ref:document.getElementById("rRef").value.trim()||uid("REF"),notes:document.getElementById("rNotes").value.trim(),lines,subtotal,discount,total,attachment:selectedAttachment,paymentStatus:"Unspecified"};
+  const unitLabel=type==="purchase"?"Unit cost":type==="sale"?"Unit selling price":"Unit value";
   document.getElementById("reviewSummary").innerHTML=`
     <div class="review-item"><span>Movement</span><strong>${esc(typeLabel(type))}</strong></div>
     <div class="review-item"><span>Party</span><strong>${esc(party)}</strong></div>
     <div class="review-item"><span>Date / reference</span><strong>${esc(date)} / ${esc(recordDraft.ref)}</strong></div>
-    <div class="table-wrap"><table><thead><tr><th>SKU / product</th><th>Qty</th><th>Unit price</th><th>Discount</th><th>Line total</th></tr></thead><tbody>${lines.map(l=>`<tr><td>${esc(l.sku)} · ${esc(l.name)}<br><span class="muted">Unit cost: ${money(l.cost)}</span></td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.discount)}</td><td>${money(l.qty*l.price-l.discount)}</td></tr>`).join("")}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>SKU / product</th><th>Qty</th><th>${unitLabel}</th><th>Discount</th><th>Line total</th></tr></thead><tbody>${lines.map(l=>`<tr><td>${esc(l.sku)} · ${esc(l.name)}${type==="sale"?`<br><span class="muted">Unit cost: ${money(l.cost)}</span>`:""}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.discount)}</td><td>${money(roundMoney(l.qty*l.price-l.discount))}</td></tr>`).join("")}</tbody></table></div>
     <div class="totals"><div class="total-row"><span>Subtotal</span><strong>${money(subtotal)}</strong></div><div class="total-row"><span>Discount</span><strong>${money(discount)}</strong></div><div class="total-row final"><span>Total</span><strong>${money(recordDraft.total)}</strong></div></div>
     <div class="review-item"><span>Attachment</span><strong>${recordDraft.attachment?"Image attached":"No attachment"}</strong></div>
     <div class="review-item"><span>Notes</span><span>${esc(recordDraft.notes||"—")}</span></div>`;
@@ -936,8 +1004,9 @@ function backToEntry(){
 function confirmRecord(){
   if(!requireDemoMode("Recording stock movements"))return;
   if(!recordDraft)return;
+  if(db.transactions.some(saved=>saved.id===recordDraft.id)){toast("This record has already been saved.");return}
   const err=validateLines(recordDraft.lines,recordDraft.type);if(err){toast(err);backToEntry();return}
-  const tx={...recordDraft,id:uid("TX"),createdAt:new Date().toISOString()};
+  const tx={...recordDraft,createdAt:new Date().toISOString()};
   tx.paymentStatus="Unspecified";
   const previousStocks=new Map(),previousMovementCount=db.stockMovements.length;
   for(const l of tx.lines){
@@ -1036,10 +1105,11 @@ function renderStockMovementHistory(){
 function showHistoryDetail(id){
   const t=db.transactions.find(x=>x.id===id);if(!t)return;activeHistoryId=id;
   const box=document.getElementById("historyDetail");box.style.display="block";
+  const unitLabel=t.type==="purchase"?"Unit cost":t.type==="sale"?"Unit selling price":"Unit value";
   box.innerHTML=`<div class="card-head"><div><h3>Transaction details</h3><p>${esc(t.ref)} · ${esc(t.date)}</p></div><button class="btn small" onclick="document.getElementById('historyDetail').style.display='none'">Close</button></div>
     <div class="review-item"><span>Party</span><strong>${esc(t.party)}</strong></div>
     <div class="review-item"><span>Movement</span><strong>${esc(typeLabel(t.type))}</strong></div>
-    <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Product</th><th>Qty</th><th>Unit cost</th><th>Unit price</th><th>Discount</th><th>Line total</th></tr></thead><tbody>${t.lines.map(l=>`<tr><td>${esc(l.sku)}</td><td>${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.cost)}</td><td>${money(l.price)}</td><td>${money(l.discount)}</td><td>${money(l.qty*l.price-l.discount)}</td></tr>`).join("")}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>SKU</th><th>Product</th><th>Qty</th><th>${unitLabel}</th>${t.type==="sale"?'<th>Unit cost</th>':""}<th>Discount</th><th>Line total</th></tr></thead><tbody>${t.lines.map(l=>`<tr><td>${esc(l.sku)}</td><td>${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td>${t.type==="sale"?`<td>${money(l.cost)}</td>`:""}<td>${money(l.discount)}</td><td>${money(roundMoney(l.qty*l.price-l.discount))}</td></tr>`).join("")}</tbody></table></div>
     <div class="totals"><div class="total-row"><span>Subtotal</span><strong>${money(t.subtotal)}</strong></div><div class="total-row"><span>Discount</span><strong>${money(t.discount)}</strong></div><div class="total-row final"><span>Total</span><strong>${money(t.total)}</strong></div></div>
     <div class="review-item"><span>Gross profit estimate</span><strong>${t.type==="sale"?money(grossProfit(t)):"Not applicable"}</strong></div>
     <div class="review-item"><span>Payment status</span><strong>${esc(t.paymentStatus||"Unspecified")}</strong></div>
