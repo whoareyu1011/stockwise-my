@@ -26,4 +26,15 @@ function createSecurityConfig(input = {}) {
     maxTokenLifetimeSeconds, sessionFreshnessSeconds });
 }
 
-module.exports = { createSecurityConfig };
+function createSecurityConfigFromEnv(env = process.env) {
+  if (!env || typeof env !== "object" || Array.isArray(env))
+    throw new SecurityError("SECURITY_CONFIGURATION");
+  return createSecurityConfig({
+    issuer: env.SUPABASE_AUTH_ISSUER,
+    jwksUrl: env.SUPABASE_AUTH_JWKS_URL,
+    audience: env.SUPABASE_AUTH_AUDIENCE,
+    algorithms: ["ES256"],
+  });
+}
+
+module.exports = { createSecurityConfig, createSecurityConfigFromEnv };

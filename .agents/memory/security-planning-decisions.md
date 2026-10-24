@@ -23,6 +23,7 @@ The user approved these design decisions for planning:
 - Company creation and first-owner onboarding: trusted backend workflow with an invitation process.
 - Administrative database credentials must be separated from business-runtime credentials.
 - Every business operation must enforce company-level authorization.
+- Supabase Auth verifier configuration must allow ES256 only; do not add an HS256 fallback.
 - For the first product-read contract, basic fields are `id`, `sku`, `name`,
   `category`, `unit_code`, and `is_active`. Owner/Admin may also receive selling
   price, cost price, stock quantity, low-stock threshold, and classification
@@ -41,3 +42,7 @@ deprecated and excluded from authorization.
 **Why:** The user explicitly confirmed these decisions in the attached planning instructions.
 
 **How to apply:** Preserve these requirements when proposing subsequent work. Do not treat other role permissions or existing prototype behavior as approved. Obtain explicit implementation and target-specific database/deployment approval before acting.
+
+**Why:** The user explicitly requested ES256 as the only signing algorithm for the Supabase Auth configuration and prohibited an HS256 fallback.
+
+**How to apply:** Keep environment-loaded Supabase Auth configuration pinned to ES256. Do not infer that publishing or activating an ES256 key authorizes HS256 support or enables business routes.
