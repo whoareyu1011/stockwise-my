@@ -20,9 +20,9 @@
 | Resource          | Link                                           |
 | ----------------- | ---------------------------------------------- |
 | GitHub Repository | https://github.com/whoareyu1011/stockwise-my |
-| Live Demo         | https://stockwise-my.replit.app                |
+| Live Demo         | https://youtu.be/9TPRd6AiFi0?si=sUrwjs4pDzVB4Qzw                |
 | Slide Deck        | https://github.com/whoareyu1011/stockwise-my/blob/67d8a5c702220f20e0348655c60b4a6f1dff99ba/Entre%20Master%20Slide.pdf|
-| Demo Video        | https://example.com/demo-video                 |
+| Demo Video        | https://youtu.be/9TPRd6AiFi0?si=sUrwjs4pDzVB4Qzw                 |
 
 ---
 
