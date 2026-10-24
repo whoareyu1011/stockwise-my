@@ -15,7 +15,8 @@
     Malaysian e-Invoice submission system.
   - Connect a secure backend to LHDN MyInvois APIs for actual submission,
     validation, official UUID/validation links and QR generation.
-  - Add real OCR and human review before importing chat screenshots.
+  - Add an approved OCR capability before claiming screenshot data extraction;
+    keep human review mandatory.
   - Production deployment needs authentication, role-based access,
     encryption, backups, audit logs and secure server-side storage.
   - Never treat a locally generated QR code as an official LHDN QR code.
@@ -282,11 +283,11 @@ tbody tr:last-child td{border-bottom:0}
         <div class="field"><label id="rPartyLabel">Customer / supplier name *</label><input id="rParty" placeholder="Enter name or business name"></div>
         <div class="field"><label>Transaction date *</label><input type="date" id="rDate"></div>
         <div class="field"><label>Reference / order number</label><input id="rRef" placeholder="Optional reference"></div>
-        <div class="field full"><label>Upload chat screenshot / order document</label><input id="rFile" type="file" accept="image/*,.pdf" onchange="showAttachment()"><div class="help" id="fileInfo">Supported in this demo: image or PDF attachment. OCR is not enabled.</div><img id="attachmentPreview" alt="Uploaded preview" style="display:none;max-width:220px;max-height:180px;border-radius:8px;margin-top:8px"></div>
+        <div class="field full"><label id="rFileLabel">Upload chat screenshot / order document</label><input id="rFile" type="file" accept="image/*,.pdf" onchange="showAttachment()"><div class="help" id="fileInfo">Demo limitation: OCR is not installed. No order details are extracted; enter them manually and review against the image.</div><img id="attachmentPreview" alt="Uploaded screenshot preview" style="display:none;max-width:280px;max-height:220px;object-fit:contain;border-radius:8px;margin-top:8px"><button class="btn small" id="clearAttachmentButton" type="button" onclick="clearAttachment()" style="display:none;margin-top:8px">Remove attachment</button></div>
         <div class="field full"><label>Notes</label><textarea id="rNotes" placeholder="Optional details, payment status or delivery notes"></textarea></div>
       </div>
       <div style="margin-top:20px">
-        <div class="card-head"><div><h3 id="lineTitle">Items sold to customer</h3><p>Select products from your catalogue.</p></div><button class="btn small" onclick="addLine()">＋ Add item</button></div>
+        <div class="card-head"><div><h3 id="lineTitle">Items sold to customer</h3><p id="lineHelp">OCR is not installed. Choose each matching product from the catalogue; prices may prefill from the catalogue and must be checked against the screenshot.</p></div><button class="btn small" onclick="addLine()">＋ Add item</button></div>
         <div class="product-lines" id="productLines"></div>
       </div>
       <div class="totals">
@@ -457,6 +458,8 @@ const today = () => new Date().toISOString().slice(0,10);
 let editingProductId = null;
 let recordDraft = null;
 let selectedAttachment = "";
+let selectedAttachmentMeta = null;
+let attachmentReadPending = false;
 let currentInvoice = null;
 let activeHistoryId = null;
 
@@ -944,33 +947,76 @@ function updateMovementLabels(){
     party.placeholder="e.g. stock count correction";
     document.getElementById("lineTitle").textContent="Items for stock adjustment";
   }
+  const uploadLabel=document.getElementById("rFileLabel");
+  const lineHelp=document.getElementById("lineHelp");
+  if(type==="sale"){
+    uploadLabel.textContent="Upload customer order chat screenshot (optional)";
+    lineHelp.textContent="OCR is not installed. Choose each matching product from the catalogue; prices may prefill from the catalogue and must be checked against the screenshot. Add unmatched products in Inventory first.";
+  }else if(type==="purchase"){
+    uploadLabel.textContent="Upload supplier purchase chat screenshot (optional)";
+    lineHelp.textContent="OCR is not installed. Choose each matching product from the catalogue; costs may prefill from the catalogue and must be checked against the screenshot. Add unmatched products in Inventory first.";
+  }else{
+    uploadLabel.textContent="Upload reference image or document (optional)";
+    lineHelp.textContent="Choose the affected products from the catalogue. Screenshot text is not extracted in this demo.";
+  }
+  if(!selectedAttachmentMeta){
+    document.getElementById("fileInfo").textContent="Demo limitation: OCR is not installed. No order details are extracted; enter them manually and review against the image.";
+  }
   const priceLabel=type==="purchase"?"Unit cost (RM)":type==="sale"?"Unit selling price (RM)":"Unit value (RM)";
   document.querySelectorAll(".line-price-label").forEach(label=>{label.textContent=priceLabel});
   if(!document.querySelector(".product-line"))renderLines();
   else calcRecordTotals();
 }
 function resetRecord(){
-  recordDraft=null;selectedAttachment="";
+  recordDraft=null;selectedAttachment="";selectedAttachmentMeta=null;attachmentReadPending=false;
   ["rParty","rRef","rNotes"].forEach(id=>document.getElementById(id).value="");
   document.getElementById("rType").value="sale";document.getElementById("rDate").value=today();
-  document.getElementById("rFile").value="";document.getElementById("fileInfo").textContent="Supported in this demo: image or PDF attachment. OCR is not enabled.";
-  document.getElementById("attachmentPreview").style.display="none";
+  document.getElementById("rFile").value="";
+  document.getElementById("attachmentPreview").style.display="none";document.getElementById("attachmentPreview").src="";
+  document.getElementById("clearAttachmentButton").style.display="none";
   document.getElementById("recordEntry").style.display="block";
   document.getElementById("recordReview").style.display="none";
   document.getElementById("recordSaved").style.display="none";
   document.getElementById("step1").classList.add("active");document.getElementById("step2").classList.remove("active");document.getElementById("step3").classList.remove("active");
   renderLines();updateMovementLabels();
 }
+function clearAttachment(){
+  selectedAttachment="";selectedAttachmentMeta=null;attachmentReadPending=false;
+  const input=document.getElementById("rFile"),img=document.getElementById("attachmentPreview");
+  input.value="";img.src="";img.style.display="none";
+  document.getElementById("clearAttachmentButton").style.display="none";
+  document.getElementById("fileInfo").textContent="No screenshot selected. OCR is not installed; enter order details manually.";
+}
 function showAttachment(){
-  const file=document.getElementById("rFile").files[0];
+  const input=document.getElementById("rFile"),file=input.files?.[0];
   const info=document.getElementById("fileInfo"),img=document.getElementById("attachmentPreview");
-  selectedAttachment="";
-  if(!file){info.textContent="No attachment selected.";img.style.display="none";return}
-  if(file.size>8*1024*1024){document.getElementById("rFile").value="";info.textContent="File exceeds the 8 MB demo limit.";img.style.display="none";return}
-  info.textContent=file.name+" · "+Math.ceil(file.size/1024)+" KB. OCR is not enabled; enter and verify details manually.";
-  if(file.type.startsWith("image/")){
-    const reader=new FileReader();reader.onload=e=>{img.src=e.target.result;img.style.display="block";selectedAttachment=e.target.result};reader.readAsDataURL(file);
-  }else{img.style.display="none";selectedAttachment="";}
+  const clearButton=document.getElementById("clearAttachmentButton");
+  selectedAttachment="";selectedAttachmentMeta=null;attachmentReadPending=false;img.style.display="none";img.src="";clearButton.style.display="none";
+  if(!file){info.textContent="No screenshot selected. OCR is not installed; enter order details manually.";return}
+  if(file.size>8*1024*1024){input.value="";info.textContent="File exceeds the 8 MB demo limit.";return}
+  const extensionMime=({png:"image/png",jpg:"image/jpeg",jpeg:"image/jpeg",webp:"image/webp",gif:"image/gif",bmp:"image/bmp",pdf:"application/pdf"})[(file.name.split(".").pop()||"").toLowerCase()]||"";
+  const mime=file.type&&file.type!=="application/octet-stream"?file.type:extensionMime;
+  if(!mime.startsWith("image/")&&mime!=="application/pdf"){
+    input.value="";info.textContent="Choose an image or PDF file.";return;
+  }
+  selectedAttachmentMeta={name:file.name,type:mime||"unknown",size:file.size};
+  clearButton.style.display="inline-flex";
+  info.textContent=`${file.name} · ${Math.ceil(file.size/1024)} KB. No data was extracted: OCR is not installed. Enter and verify details manually.`;
+  if(mime.startsWith("image/")){
+    attachmentReadPending=true;
+    const reader=new FileReader();
+    reader.onload=e=>{
+      if(input.files?.[0]!==file)return;
+      selectedAttachment=e.target.result;attachmentReadPending=false;img.src=selectedAttachment;img.style.display="block";
+    };
+    reader.onerror=()=>{
+      if(input.files?.[0]!==file)return;
+      attachmentReadPending=false;selectedAttachment="";info.textContent="The image could not be previewed. Remove it or select it again before review.";
+    };
+    reader.readAsDataURL(file);
+  }else{
+    info.textContent+=" PDF contents are not previewed or stored in this demo; only file details are retained.";
+  }
 }
 function addLine(line={}){
   const container=document.getElementById("productLines");
@@ -993,15 +1039,17 @@ function lineChanged(select,keepPrice=false){
 }
 function collectLines(){
   return [...document.querySelectorAll(".product-line")].map(row=>{
-    const product=getProduct(row.querySelector(".line-product").value);
-    return product?{
-      productId:product.id,sku:product.sku,name:product.name,category:product.category,
+    const productId=row.querySelector(".line-product").value;
+    const product=productId?getProduct(productId):null;
+    return {
+      productId:productId||"",
+      sku:product?.sku||"",name:product?.name||"",category:product?.category||"",
       qty:Number(row.querySelector(".line-qty").value),price:Number(row.querySelector(".line-price").value),
       priceEntered:row.querySelector(".line-price").value.trim()!=="",
       discount:Number(row.querySelector(".line-discount").value),
-      cost:Number(product.cost),costAtSale:Number(product.cost)
-    }:null;
-  }).filter(Boolean);
+      cost:product?Number(product.cost):NaN,costAtSale:product?Number(product.cost):NaN
+    };
+  });
 }
 function isCurrencyAmount(value){
   if(!Number.isFinite(value))return false;
@@ -1025,6 +1073,9 @@ function validateLines(lines,type){
   if(!["sale","purchase","adjustment_in","adjustment_out"].includes(type))return "Choose a valid movement type.";
   const quantities=new Map();
   for(const l of lines){
+    if(!l.productId)return "Select a product from the catalogue for every order line. Add unmatched products in Inventory first.";
+    const p=getProduct(l.productId);
+    if(!p)return "A selected product no longer exists. Choose it again from the catalogue.";
     if(!Number.isSafeInteger(l.qty)||l.qty<=0)return "Each quantity must be a positive whole number.";
     if((type==="sale"||type==="purchase")&&l.priceEntered===false)return "Enter a unit selling price or unit cost for every item.";
     if(!Number.isFinite(l.price)||l.price<0||!Number.isFinite(l.discount)||l.discount<0)return "Check each item price and discount.";
@@ -1032,8 +1083,6 @@ function validateLines(lines,type){
     const lineSubtotal=roundMoney(l.qty*l.price);
     if(!isCurrencyAmount(lineSubtotal))return "A line amount exceeds the supported range.";
     if(l.discount>lineSubtotal)return "A line discount cannot exceed its line subtotal.";
-    const p=getProduct(l.productId);
-    if(!p)return "A selected product no longer exists.";
     if(!Number.isSafeInteger(p.stock)||p.stock<0)return "The current stock balance for "+p.name+" is invalid.";
     const total=(quantities.get(p.id)||0)+l.qty;
     if(!Number.isSafeInteger(total))return "The combined quantity is too large.";
@@ -1053,6 +1102,11 @@ function validateLines(lines,type){
 }
 function reviewRecord(){
   if(!requireDemoMode("Recording stock movements"))return;
+  if(attachmentReadPending){toast("Wait for the screenshot preview to finish before reviewing.");return}
+  if(selectedAttachmentMeta?.type?.startsWith("image/")&&!selectedAttachment){
+    toast("The screenshot preview is unavailable. Select it again or clear the attachment before reviewing.");
+    return;
+  }
   const type=document.getElementById("rType").value,party=document.getElementById("rParty").value.trim(),date=document.getElementById("rDate").value;
   const enteredLines=collectLines(),err=validateLines(enteredLines,type);
   if(!party||!date){
@@ -1064,15 +1118,19 @@ function reviewRecord(){
   if(err){toast(err);return}
   const lines=enteredLines.map(({priceEntered,...line})=>line);
   const {subtotal,discount,total}=calculateRecordAmounts(lines);
-  recordDraft={id:uid("TX"),type,party,date,ref:document.getElementById("rRef").value.trim()||uid("REF"),notes:document.getElementById("rNotes").value.trim(),lines,subtotal,discount,total,attachment:selectedAttachment,paymentStatus:"Unspecified"};
+  recordDraft={id:uid("TX"),type,party,date,ref:document.getElementById("rRef").value.trim()||uid("REF"),notes:document.getElementById("rNotes").value.trim(),lines,subtotal,discount,total,attachment:selectedAttachment,attachmentMeta:selectedAttachmentMeta?{...selectedAttachmentMeta}:null,paymentStatus:"Unspecified"};
   const unitLabel=type==="purchase"?"Unit cost":type==="sale"?"Unit selling price":"Unit value";
+  const screenshotReview=recordDraft.attachmentMeta
+    ?`<div class="notice"><strong>Source file:</strong> ${esc(recordDraft.attachmentMeta.name)}<br><span class="help">No OCR text was extracted. The fields below are form values; prices or costs may be prefilled from the catalogue. Verify the party, date, quantities, prices and discounts against the uploaded file.</span>${recordDraft.attachment?`<div><img src="${esc(recordDraft.attachment)}" alt="Uploaded order screenshot for review" style="max-width:100%;max-height:420px;object-fit:contain;border-radius:8px;margin-top:12px"></div>`:`<div class="help">PDF contents are not previewed or stored in this demo; only file details are retained.</div>`}</div>`
+    :`<div class="notice">No screenshot attached. No information was extracted automatically; review the manually entered details below.</div>`;
   document.getElementById("reviewSummary").innerHTML=`
+    ${screenshotReview}
     <div class="review-item"><span>Movement</span><strong>${esc(typeLabel(type))}</strong></div>
     <div class="review-item"><span>Party</span><strong>${esc(party)}</strong></div>
     <div class="review-item"><span>Date / reference</span><strong>${esc(date)} / ${esc(recordDraft.ref)}</strong></div>
     <div class="table-wrap"><table><thead><tr><th>SKU / product</th><th>Qty</th><th>${unitLabel}</th><th>Discount</th><th>Line total</th></tr></thead><tbody>${lines.map(l=>`<tr><td>${esc(l.sku)} · ${esc(l.name)}${type==="sale"?`<br><span class="muted">Unit cost at sale: ${formatRecordedSaleCost(l)}</span>`:""}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(l.discount)}</td><td>${money(roundMoney(l.qty*l.price-l.discount))}</td></tr>`).join("")}</tbody></table></div>
     <div class="totals"><div class="total-row"><span>Subtotal</span><strong>${money(subtotal)}</strong></div><div class="total-row"><span>Discount</span><strong>${money(discount)}</strong></div><div class="total-row final"><span>Total</span><strong>${money(recordDraft.total)}</strong></div></div>
-    <div class="review-item"><span>Attachment</span><strong>${recordDraft.attachment?"Image attached":"No attachment"}</strong></div>
+    <div class="review-item"><span>Product matching</span><span>Products were selected manually from the catalogue. No OCR matching was performed.</span></div>
     <div class="review-item"><span>Notes</span><span>${esc(recordDraft.notes||"—")}</span></div>`;
   document.getElementById("recordEntry").style.display="none";document.getElementById("recordReview").style.display="block";
   document.getElementById("step2").classList.add("active");window.scrollTo({top:0,behavior:"smooth"});
