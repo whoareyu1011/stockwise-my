@@ -257,7 +257,7 @@ tbody tr:last-child td{border-bottom:0}
 </section>
 
 <section class="page" id="page-inventory">
-  <div class="page-intro"><div><h2>Product catalogue</h2><p>Manage SKUs, categories, pricing and available stock.</p></div><button class="btn primary" onclick="openProduct()" data-demo-only>＋ Add product</button></div>
+  <div class="page-intro"><div><h2>Product catalogue</h2><p>Manage stock codes, categories and pricing; use stock movements to change quantities.</p></div><button class="btn primary" onclick="openProduct()" data-demo-only>＋ Add product</button></div>
   <div class="card">
     <div class="toolbar">
       <input class="search" id="inventorySearch" placeholder="Search SKU, product or category..." oninput="renderInventory()">
@@ -269,14 +269,14 @@ tbody tr:last-child td{border-bottom:0}
 </section>
 
 <section class="page" id="page-record" data-demo-only>
-  <div class="page-intro"><div><h2>Record stock movement</h2><p>Upload a chat screenshot or enter an order manually.</p></div></div>
-  <div class="notice">Simple workflow: upload or enter details → check extracted information → confirm the record. A screenshot is not automatically interpreted in this demo. In production, connect private OCR and require your approval before saving.</div>
+  <div class="page-intro"><div><h2>Record stock movement</h2><p>Record a sale, purchase or manual stock-in / stock-out adjustment.</p></div></div>
+  <div class="notice">Enter or review the details before confirming. Sales and stock-out adjustments cannot exceed the available balance. Screenshot OCR is not enabled in this demo.</div>
   <div class="card">
     <div class="stepper"><div class="step active" id="step1">1. Enter details</div><div class="step" id="step2">2. Review</div><div class="step" id="step3">3. Saved</div></div>
     <div id="recordEntry">
       <div class="form-grid">
         <div class="field"><label>Movement type *</label><select id="rType" onchange="updateMovementLabels()"><option value="sale">Stock out — customer order</option><option value="purchase">Stock in — supplier purchase</option><option value="adjustment_in">Stock adjustment — increase</option><option value="adjustment_out">Stock adjustment — decrease</option></select></div>
-        <div class="field"><label>Customer / supplier name *</label><input id="rParty" placeholder="Enter name or business name"></div>
+        <div class="field"><label id="rPartyLabel">Customer / supplier name *</label><input id="rParty" placeholder="Enter name or business name"></div>
         <div class="field"><label>Transaction date *</label><input type="date" id="rDate"></div>
         <div class="field"><label>Reference / order number</label><input id="rRef" placeholder="Optional reference"></div>
         <div class="field full"><label>Upload chat screenshot / order document</label><input id="rFile" type="file" accept="image/*,.pdf" onchange="showAttachment()"><div class="help" id="fileInfo">Supported in this demo: image or PDF attachment. OCR is not enabled.</div><img id="attachmentPreview" alt="Uploaded preview" style="display:none;max-width:220px;max-height:180px;border-radius:8px;margin-top:8px"></div>
@@ -385,8 +385,8 @@ tbody tr:last-child td{border-bottom:0}
   <div class="form-grid">
     <div class="field"><label>Product name *</label><input id="pName" placeholder="e.g. Blue ballpoint pen"></div>
     <div class="field"><label>Category *</label><input id="pCategory" list="categoryOptions" placeholder="e.g. Stationery"><datalist id="categoryOptions"><option>Stationery</option><option>Toys</option><option>Accessories</option><option>Home & Living</option><option>Electronics</option><option>Clothing</option><option>Other</option></datalist></div>
-    <div class="field"><label>SKU / stock code</label><input id="pSku" placeholder="Auto-generated if blank"></div>
-    <div class="field"><label>Opening / current quantity *</label><input id="pStock" type="number" min="0" step="1" value="0"></div>
+    <div class="field"><label>SKU / stock code</label><input id="pSku" maxlength="64" placeholder="Auto-generated if blank"></div>
+    <div class="field"><label id="pStockLabel">Opening stock *</label><input id="pStock" type="number" min="0" step="1" value="0"><div class="help" id="pStockHelp">Opening stock is recorded as an opening movement.</div></div>
     <div class="field"><label>Cost price per unit (RM) *</label><input id="pCost" type="number" min="0" step="0.01" value="0"></div>
     <div class="field"><label>Selling price per unit (RM) *</label><input id="pPrice" type="number" min="0" step="0.01" value="0"></div>
     <div class="field"><label>Low-stock alert threshold</label><input id="pThreshold" type="number" min="0" step="1" value="5"></div>
@@ -429,14 +429,53 @@ function initialData(){
   ];
   return {products,transactions:[],invoices:[],settings:{businessName:""}};
 }
+function openingSnapshot(product){
+  const stock=Number(product.stock||0);
+  if(!Number.isSafeInteger(stock)||stock<=0)return null;
+  return {
+    id:"opening-"+String(product.id),
+    productId:String(product.id),
+    type:"opening",
+    quantityDelta:stock,
+    date:today(),
+    reference:"Opening balance",
+    source:"legacy_snapshot"
+  };
+}
+function normalizeDemoData(data){
+  const normalized={
+    ...data,
+    products:data.products,
+    transactions:data.transactions,
+    invoices:data.invoices
+  };
+  if(!Array.isArray(data.stockMovements)){
+    // Existing balances already include their saved transaction history.
+    // Start the new ledger from a snapshot; do not replay old transactions.
+    normalized.stockMovements=data.products.map(openingSnapshot).filter(Boolean);
+  }else{
+    normalized.stockMovements=data.stockMovements;
+    const balances=new Map();
+    normalized.stockMovements.forEach(movement=>{
+      if(!movement||typeof movement.productId!=="string"||
+         !Number.isSafeInteger(movement.quantityDelta))return;
+      balances.set(movement.productId,(balances.get(movement.productId)||0)+movement.quantityDelta);
+    });
+    normalized.products.forEach(product=>{
+      const balance=balances.get(String(product.id))||0;
+      if(Number.isSafeInteger(balance)&&balance>=0)product.stock=balance;
+    });
+  }
+  return normalized;
+}
 function loadData(){
   try{
     const raw=localStorage.getItem(STORAGE_KEY);
-    if(!raw)return initialData();
+    if(!raw)return normalizeDemoData(initialData());
     const d=JSON.parse(raw);
-    if(!Array.isArray(d.products)||!Array.isArray(d.transactions)||!Array.isArray(d.invoices))return initialData();
-    return d;
-  }catch(e){return initialData()}
+    if(!Array.isArray(d.products)||!Array.isArray(d.transactions)||!Array.isArray(d.invoices))return normalizeDemoData(initialData());
+    return normalizeDemoData(d);
+  }catch(e){return normalizeDemoData(initialData())}
 }
 let db=isDemoMode?loadData():{products:[],transactions:[],invoices:[],settings:{businessName:""}};
 let productApiError="";
@@ -603,7 +642,10 @@ function renderInventory(){
     <td>${money(p.cost)}</td><td>${money(p.price)}</td>
     <td><span class="pill ${p.stock<=p.threshold?"amber":"green"}">${p.stock} units</span></td>
     <td>${money(p.stock*p.cost)}</td>
-    <td><button class="btn small" onclick="openProduct('${esc(p.id)}')">Edit</button> <button class="btn small danger" onclick="deleteProduct('${esc(p.id)}')">Delete</button></td>
+    <td><button class="btn small" onclick="openProduct('${esc(p.id)}')">Edit</button>
+      <button class="btn small" onclick="openProductMovement('${esc(p.id)}','adjustment_in')">Stock in</button>
+      <button class="btn small" onclick="openProductMovement('${esc(p.id)}','adjustment_out')">Stock out</button>
+      <button class="btn small danger" onclick="deleteProduct('${esc(p.id)}')">Delete</button></td>
   </tr>`:`<tr><td><div class="strong">${esc(p.name)}</div><div class="muted">${esc(p.sku)}</div></td>
     <td><span class="pill blue">${esc(p.category)}</span></td></tr>`).join(""):`<tr><td colspan="${isDemoMode?7:2}"><div class="empty">No matching products.</div></td></tr>`;
 }
@@ -615,8 +657,12 @@ function openProduct(id=null){
   document.getElementById("pName").value=p?.name||"";
   document.getElementById("pCategory").value=p?.category||"Stationery";
   document.getElementById("pSku").value=p?.sku||"";
-  document.getElementById("pSku").disabled=!!p;
   document.getElementById("pStock").value=p?.stock??0;
+  document.getElementById("pStock").readOnly=!!p;
+  document.getElementById("pStockLabel").textContent=p?"Current stock · use Stock in/out":"Opening stock *";
+  document.getElementById("pStockHelp").textContent=p
+    ?"Quantity is derived from the movement ledger and cannot be edited here."
+    :"Saved as an opening movement so the stock ledger matches the starting balance.";
   document.getElementById("pCost").value=p?.cost??0;
   document.getElementById("pPrice").value=p?.price??0;
   document.getElementById("pThreshold").value=p?.threshold??5;
@@ -627,30 +673,65 @@ function closeModal(id){document.getElementById(id).classList.remove("open")}
 function nextSku(category){
   const prefix=({Stationery:"S",Toys:"T",Accessories:"A","Home & Living":"H",Electronics:"E",Clothing:"C"})[category]||"P";
   let max=0;
-  db.products.forEach(p=>{const m=p.sku.match(new RegExp("^"+prefix+"(\\\\d+)$"));if(m)max=Math.max(max,Number(m[1]))});
+  db.products.forEach(p=>{const m=p.sku.match(new RegExp("^"+prefix+"(\\d+)$","i"));if(m)max=Math.max(max,Number(m[1]))});
   return prefix+String(max+1).padStart(4,"0");
 }
 function saveProduct(){
   if(!requireDemoMode("Product editing"))return;
   const name=document.getElementById("pName").value.trim(),category=document.getElementById("pCategory").value.trim();
-  const cost=Number(document.getElementById("pCost").value),price=Number(document.getElementById("pPrice").value);
-  const stock=Number(document.getElementById("pStock").value),threshold=Number(document.getElementById("pThreshold").value);
+  const skuInput=document.getElementById("pSku").value.trim().toUpperCase();
+  const costValue=document.getElementById("pCost").value.trim(),priceValue=document.getElementById("pPrice").value.trim();
+  const stockValue=document.getElementById("pStock").value.trim(),thresholdValue=document.getElementById("pThreshold").value.trim();
+  const cost=Number(costValue),price=Number(priceValue),threshold=Number(thresholdValue),stock=Number(stockValue);
+  const existing=editingProductId?getProduct(editingProductId):null;
+  const sku=skuInput||(existing?existing.sku:nextSku(category));
   if(!name||!category){toast("Enter a product name and category.");return}
-  if([cost,price,stock,threshold].some(n=>!Number.isFinite(n)||n<0)||!Number.isInteger(stock)||!Number.isInteger(threshold)){toast("Check price and stock values.");return}
-  if(editingProductId){
-    const p=getProduct(editingProductId);Object.assign(p,{name,category,cost,price,stock,threshold,classCode:document.getElementById("pClass").value.trim()});
-  }else{
-    const sku=document.getElementById("pSku").value.trim().toUpperCase()||nextSku(category);
-    if(db.products.some(p=>p.sku.toUpperCase()===sku)){toast("That SKU already exists.");return}
-    db.products.push({id:uid("P"),sku,name,category,cost,price,stock,threshold,classCode:document.getElementById("pClass").value.trim()});
+  if(!sku||sku.length>64||!costValue||!priceValue||!thresholdValue||
+     [cost,price,threshold].some(n=>!Number.isFinite(n)||n<0)||
+     !Number.isSafeInteger(threshold)||(!existing&&(!stockValue||!Number.isSafeInteger(stock)||stock<0))){
+    toast("Check the stock code, prices and whole-number quantities.");return;
   }
-  persist();closeModal("productModal");renderAll();toast("Product saved.");
+  if(db.products.some(p=>p.id!==editingProductId&&p.sku.toUpperCase()===sku)){
+    toast("That stock code is already in use.");return;
+  }
+  const classCode=document.getElementById("pClass").value.trim();
+  if(editingProductId){
+    if(!existing){toast("This product is no longer available.");return}
+    const previous={...existing};
+    Object.assign(existing,{sku,name,category,cost,price,threshold,classCode});
+    if(!persist()){Object.assign(existing,previous);return}
+  }else{
+    const product={id:uid("P"),sku,name,category,cost,price,stock,threshold,classCode};
+    db.products.push(product);
+    if(stock>0){
+      db.stockMovements.push({
+        id:uid("SM"),productId:product.id,type:"opening",quantityDelta:stock,
+        date:today(),reference:"Opening stock",source:"new_product"
+      });
+    }
+    if(!persist()){
+      db.products.pop();
+      db.stockMovements=db.stockMovements.filter(m=>m.productId!==product.id);
+      return;
+    }
+  }
+  closeModal("productModal");renderAll();toast("Product saved in this browser.");
 }
 function deleteProduct(id){
   if(!requireDemoMode("Product deletion"))return;
   const p=getProduct(id);if(!p)return;
   if(db.transactions.some(t=>t.lines.some(l=>l.productId===id))){toast("Cannot delete a product with transaction history. Set stock to zero instead.");return}
-  if(confirm("Delete "+p.name+"?")){db.products=db.products.filter(x=>x.id!==id);persist();renderAll();toast("Product deleted.")}
+  if(confirm("Delete "+p.name+" from this browser's demo catalogue?")){
+    const index=db.products.indexOf(p),previousMovements=db.stockMovements;
+    db.products=db.products.filter(x=>x.id!==id);
+    db.stockMovements=db.stockMovements.filter(m=>m.productId!==id);
+    if(!persist()){
+      db.products.splice(index,0,p);
+      db.stockMovements=previousMovements;
+      return;
+    }
+    renderAll();toast("Product deleted from this browser.");
+  }
 }
 function exportCSV(filename,rows){
   const csv=rows.map(row=>row.map(v=>'"'+String(v??"").replace(/"/g,'""')+'"').join(",")).join("\r\n");
@@ -668,10 +749,40 @@ function exportHistory(){
 
 /* RECORD MOVEMENT */
 function openRecord(){if(!requireDemoMode("Recording stock movements"))return;navigate("record");resetRecord()}
+function openProductMovement(productId,type){
+  if(!requireDemoMode("Recording stock movements"))return;
+  const product=getProduct(productId);
+  if(!product||!["adjustment_in","adjustment_out"].includes(type)){
+    toast("Choose a valid product and stock movement.");
+    return;
+  }
+  navigate("record");
+  resetRecord();
+  document.getElementById("rType").value=type;
+  updateMovementLabels();
+  document.getElementById("productLines").innerHTML="";
+  addLine({productId:product.id,qty:1,price:0,discount:0});
+  document.getElementById("rParty").focus();
+}
 function updateMovementLabels(){
   const type=document.getElementById("rType").value;
-  document.getElementById("lineTitle").textContent=type==="sale"?"Items sold to customer":type==="purchase"?"Items purchased from supplier":"Items for stock adjustment";
-  renderLines();
+  const partyLabel=document.getElementById("rPartyLabel");
+  const party=document.getElementById("rParty");
+  if(type==="sale"){
+    partyLabel.textContent="Customer name *";
+    party.placeholder="Enter customer or business name";
+    document.getElementById("lineTitle").textContent="Items sold to customer";
+  }else if(type==="purchase"){
+    partyLabel.textContent="Supplier name *";
+    party.placeholder="Enter supplier or business name";
+    document.getElementById("lineTitle").textContent="Items purchased from supplier";
+  }else{
+    partyLabel.textContent="Adjustment reason *";
+    party.placeholder="e.g. stock count correction";
+    document.getElementById("lineTitle").textContent="Items for stock adjustment";
+  }
+  if(!document.querySelector(".product-line"))renderLines();
+  else calcRecordTotals();
 }
 function resetRecord(){
   recordDraft=null;selectedAttachment="";
@@ -735,13 +846,26 @@ function calcRecordTotals(){
 }
 function validateLines(lines,type){
   if(!lines.length)return "Add at least one valid product.";
+  if(!["sale","purchase","adjustment_in","adjustment_out"].includes(type))return "Choose a valid movement type.";
+  const quantities=new Map();
   for(const l of lines){
-    if(!Number.isInteger(l.qty)||l.qty<=0)return "Each quantity must be a positive whole number.";
+    if(!Number.isSafeInteger(l.qty)||l.qty<=0)return "Each quantity must be a positive whole number.";
     if(!Number.isFinite(l.price)||l.price<0||!Number.isFinite(l.discount)||l.discount<0)return "Check each item price and discount.";
     if(l.discount>l.qty*l.price)return "A line discount cannot exceed its line subtotal.";
     const p=getProduct(l.productId);
     if(!p)return "A selected product no longer exists.";
-    if((type==="sale"||type==="adjustment_out")&&p.stock<l.qty)return "Insufficient stock for "+p.name+". Available: "+p.stock+".";
+    if(!Number.isSafeInteger(p.stock)||p.stock<0)return "The current stock balance for "+p.name+" is invalid.";
+    const total=(quantities.get(p.id)||0)+l.qty;
+    if(!Number.isSafeInteger(total))return "The combined quantity is too large.";
+    quantities.set(p.id,total);
+  }
+  for(const [productId,quantity] of quantities){
+    const p=getProduct(productId);
+    if(type==="sale"||type==="adjustment_out"){
+      if(quantity>p.stock)return "Insufficient stock for "+p.name+". Available: "+p.stock+".";
+    }else if(!Number.isSafeInteger(p.stock+quantity)){
+      return "The resulting stock quantity is too large for "+p.name+".";
+    }
   }
   return "";
 }
@@ -749,7 +873,12 @@ function reviewRecord(){
   if(!requireDemoMode("Recording stock movements"))return;
   const type=document.getElementById("rType").value,party=document.getElementById("rParty").value.trim(),date=document.getElementById("rDate").value;
   const lines=collectLines(),err=validateLines(lines,type);
-  if(!party||!date){toast("Enter a name and transaction date.");return}
+  if(!party||!date){
+    toast(type==="adjustment_in"||type==="adjustment_out"
+      ?"Enter an adjustment reason and transaction date."
+      :"Enter a customer or supplier name and transaction date.");
+    return;
+  }
   if(err){toast(err);return}
   const subtotal=lines.reduce((s,l)=>s+l.qty*l.price,0),discount=lines.reduce((s,l)=>s+l.discount,0);
   recordDraft={type,party,date,ref:document.getElementById("rRef").value.trim()||uid("TX"),notes:document.getElementById("rNotes").value.trim(),lines,subtotal,discount,total:subtotal-discount,attachment:selectedAttachment,paymentStatus:"Unspecified"};
@@ -774,12 +903,25 @@ function confirmRecord(){
   const err=validateLines(recordDraft.lines,recordDraft.type);if(err){toast(err);backToEntry();return}
   const tx={...recordDraft,id:uid("TX"),createdAt:new Date().toISOString()};
   tx.paymentStatus="Unspecified";
+  const previousStocks=new Map(),previousMovementCount=db.stockMovements.length;
   for(const l of tx.lines){
     const p=getProduct(l.productId);
-    if(tx.type==="sale"||tx.type==="adjustment_out")p.stock-=l.qty;
-    else if(tx.type==="purchase"||tx.type==="adjustment_in")p.stock+=l.qty;
+    if(!previousStocks.has(p.id))previousStocks.set(p.id,p.stock);
+    const quantityDelta=(tx.type==="sale"||tx.type==="adjustment_out")?-l.qty:l.qty;
+    p.stock+=quantityDelta;
+    db.stockMovements.push({
+      id:uid("SM"),productId:p.id,type:tx.type,quantityDelta,
+      date:tx.date,reference:tx.ref,transactionId:tx.id,source:"transaction"
+    });
   }
-  db.transactions.push(tx);persist();recordDraft=null;
+  db.transactions.push(tx);
+  if(!persist()){
+    previousStocks.forEach((stock,productId)=>{const product=getProduct(productId);if(product)product.stock=stock});
+    db.stockMovements.splice(previousMovementCount);
+    db.transactions.pop();
+    return;
+  }
+  recordDraft=null;
   document.getElementById("recordEntry").style.display="none";document.getElementById("recordReview").style.display="none";
   document.getElementById("recordSaved").style.display="block";
   document.getElementById("savedSummary").innerHTML=`<div class="review-item"><span>Reference</span><strong>${esc(tx.ref)}</strong></div><div class="review-item"><span>Party</span><strong>${esc(tx.party)}</strong></div><div class="review-item"><span>Recorded total</span><strong>${money(tx.total)}</strong></div><div class="review-item"><span>Stock updated</span><strong>${esc(typeLabel(tx.type))}</strong></div>`;
